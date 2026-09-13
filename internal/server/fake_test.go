@@ -102,6 +102,7 @@ type fakeScreen struct {
 	dirty      bool
 	fillCh     rune  // when non-zero, snapshots/scrollback return this in every cell
 	writeErr   error // when set, the next Write returns this error and clears it
+	snapPanic  bool  // when set, the next SnapshotInto panics and clears it
 }
 
 func newFakeScreen(cols, rows int) *fakeScreen {
@@ -156,9 +157,21 @@ func (s *fakeScreen) Snapshot() vterm.Snapshot {
 	return snap
 }
 
+// panicNextSnapshot makes the next SnapshotInto panic, simulating a bug while a
+// frame is being built.
+func (s *fakeScreen) panicNextSnapshot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapPanic = true
+}
+
 func (s *fakeScreen) SnapshotInto(dst *vterm.Snapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.snapPanic {
+		s.snapPanic = false
+		panic("fakeScreen: injected snapshot panic")
+	}
 	s.dirty = false
 	need := s.cols * s.rows
 	if cap(dst.Cells) < need {
