@@ -139,6 +139,15 @@ func (t *State) logln(s string) {
 	}
 }
 
+// logRune traces one parsed rune. The parser calls it for every rune, so the
+// nil check comes before the rune is boxed into a string: going through logf
+// would allocate per rune even with no logger attached.
+func (t *State) logRune(c rune) {
+	if t.DebugLogger != nil {
+		t.DebugLogger.Printf("%q", string(c))
+	}
+}
+
 func (t *State) lock() {
 	t.mu.Lock()
 }

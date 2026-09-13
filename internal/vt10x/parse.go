@@ -5,7 +5,7 @@ func isControlCode(c rune) bool {
 }
 
 func (t *State) parse(c rune) {
-	t.logf("%q", string(c))
+	t.logRune(c)
 	if isControlCode(c) {
 		if t.handleControlCodes(c) || t.cur.Attr.Mode&attrGfx == 0 {
 			return
@@ -62,7 +62,7 @@ func (t *State) parseEsc(c rune) {
 		return
 	}
 	next := t.parse
-	t.logf("%q", string(c))
+	t.logRune(c)
 	switch c {
 	case '[':
 		next = t.parseEscCSI
@@ -120,7 +120,7 @@ func (t *State) parseEscCSI(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
-	t.logf("%q", string(c))
+	t.logRune(c)
 	if t.csi.put(byte(c)) {
 		t.state = t.parse
 		t.handleCSI()
@@ -128,7 +128,7 @@ func (t *State) parseEscCSI(c rune) {
 }
 
 func (t *State) parseEscStr(c rune) {
-	t.logf("%q", string(c))
+	t.logRune(c)
 	switch c {
 	case '\033':
 		t.state = t.parseEscStrEnd
@@ -144,7 +144,7 @@ func (t *State) parseEscStrEnd(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
-	t.logf("%q", string(c))
+	t.logRune(c)
 	t.state = t.parse
 	if c == '\\' {
 		t.handleSTR()
@@ -155,7 +155,7 @@ func (t *State) parseEscAltCharset(c rune) {
 	if t.handleControlCodes(c) {
 		return
 	}
-	t.logf("%q", string(c))
+	t.logRune(c)
 	switch c {
 	case '0': // line drawing set
 		t.cur.Attr.Mode |= attrGfx
