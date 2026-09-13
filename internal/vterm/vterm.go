@@ -361,6 +361,41 @@ func (t *Term) ScrolledTotal() uint64 {
 	return t.scrolledTotal
 }
 
+// InputModes reports the subset of the emulator's terminal modes the server
+// needs to route mouse input and translate wheel notches: which flavour of
+// mouse reporting the app currently has enabled (at most one of the four at a
+// time — vt10x clears the others whenever one is requested), whether it wants
+// SGR (extended) encoding, whether it is on the alternate screen, and whether
+// it wants application-cursor key sequences.
+func (t *Term) InputModes() InputModes {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.t.Lock()
+	defer t.t.Unlock()
+	m := t.t.Mode()
+	return InputModes{
+		MouseX10:    m&vt10x.ModeMouseX10 != 0,
+		MouseButton: m&vt10x.ModeMouseButton != 0,
+		MouseMotion: m&vt10x.ModeMouseMotion != 0,
+		MouseAny:    m&vt10x.ModeMouseMany != 0,
+		MouseSGR:    m&vt10x.ModeMouseSgr != 0,
+		AltScreen:   m&vt10x.ModeAltScreen != 0,
+		AppCursor:   m&vt10x.ModeAppCursor != 0,
+	}
+}
+
+// InputModes is the small slice of vt10x.ModeFlag the server acts on. See
+// Term.InputModes.
+type InputModes struct {
+	MouseX10    bool // mode 9: button presses only, no release
+	MouseButton bool // mode 1000: press + release
+	MouseMotion bool // mode 1002: press + release + drag while a button is held
+	MouseAny    bool // mode 1003: press + release + drag, same as Motion for our purposes
+	MouseSGR    bool // mode 1006: extended (SGR) report encoding instead of legacy X10
+	AltScreen   bool // the alternate screen is active (vim, less, htop, ...)
+	AppCursor   bool // DECCKM: cursor keys send ESC O x instead of ESC [ x
+}
+
 // Snapshot copies the whole live screen out.
 func (t *Term) Snapshot() Snapshot {
 	var s Snapshot
