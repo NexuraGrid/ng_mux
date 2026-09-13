@@ -13,11 +13,36 @@ package vterm
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"runtime/debug"
 	"sync"
 
 	"github.com/MauricioJC3/ng_mux/internal/vt10x"
 )
+
+// ErrEmulatorPanic marks a Write error caused by a recovered panic inside the
+// underlying vt10x emulator. vt10x defends against most malformed input, but
+// it is a large, vendored state machine and a hostile or buggy pty payload
+// can still trip an invariant it does not guard. Rather than let that panic
+// climb out of Term.Write and take down whatever goroutine is pumping pty
+// output (which, unrecovered, takes down the whole daemon), Write recovers,
+// discards the panicking emulator, and replaces it with a fresh one of the
+// same size. Callers can match this sentinel with errors.Is to distinguish
+// "the emulator glitched and was reset" from an ordinary I/O error.
+var ErrEmulatorPanic = errors.New("vterm: recovered panic in terminal emulator")
+
+// newEmulator builds a vt10x terminal of the given size, wired to reply for
+// device-query responses (DA, DSR, ...). It is the single constructor used by
+// both New and Write's panic-recovery path, so the two can never drift.
+func newEmulator(cols, rows int, reply io.Writer) vt10x.Terminal {
+	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows)}
+	if reply != nil {
+		opts = append(opts, vt10x.WithWriter(reply))
+	}
+	return vt10x.New(opts...)
+}
 
 // Attribute bits on a Cell. These mirror vt10x's internal glyph flags, which
 // are not exported by that package; the values are part of its on-wire VT
@@ -107,11 +132,7 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if rows <= 0 {
 		rows = 24
 	}
-	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows)}
-	if reply != nil {
-		opts = append(opts, vt10x.WithWriter(reply))
-	}
-	return &Term{t: vt10x.New(opts...), reply: reply, cols: cols, rows: rows, histLimit: 2000, dirty: true}
+	return &Term{t: newEmulator(cols, rows, reply), reply: reply, cols: cols, rows: rows, histLimit: 2000, dirty: true}
 }
 
 // Device-attribute query/response pairs. vt10x answers DSR (cursor position,
@@ -159,9 +180,24 @@ func (t *Term) SetHistoryLimit(n int) {
 // only taken when a scroll is actually possible: the cursor is on (or near) the
 // last row, or the slice is long enough to wrap into one. Steady output that
 // does not touch the bottom of the screen costs nothing extra.
-func (t *Term) Write(p []byte) (int, error) {
+func (t *Term) Write(p []byte) (n int, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// vt10x's own Write releases its internal lock via defer, so a recovered
+	// panic there never leaves it held. This defer runs before the mu.Unlock
+	// above (LIFO), so by the time it fires t.mu is still ours to use: it
+	// swaps in a fresh emulator, marks the pane dirty so the next Snapshot
+	// repaints it (clean, if blank), and turns the panic into an error
+	// instead of letting it climb out of Write and kill the caller's
+	// goroutine.
+	defer func() {
+		if r := recover(); r != nil {
+			t.t = newEmulator(t.cols, t.rows, t.reply)
+			t.dirty = true
+			err = fmt.Errorf("%w: %v\n%s", ErrEmulatorPanic, r, debug.Stack())
+		}
+	}()
 
 	if len(p) > 0 {
 		t.dirty = true

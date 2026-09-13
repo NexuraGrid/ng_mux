@@ -100,7 +100,8 @@ type fakeScreen struct {
 	hist       int
 	histLimit  int
 	dirty      bool
-	fillCh     rune // when non-zero, snapshots/scrollback return this in every cell
+	fillCh     rune  // when non-zero, snapshots/scrollback return this in every cell
+	writeErr   error // when set, the next Write returns this error and clears it
 }
 
 func newFakeScreen(cols, rows int) *fakeScreen {
@@ -113,7 +114,21 @@ func (s *fakeScreen) Write(p []byte) (int, error) {
 	if len(p) > 0 {
 		s.dirty = true
 	}
-	return s.consumed.Write(p)
+	n, _ := s.consumed.Write(p)
+	if s.writeErr != nil {
+		err := s.writeErr
+		s.writeErr = nil
+		return n, err
+	}
+	return n, nil
+}
+
+// setWriteErr makes the next Write call return err instead of nil, to
+// simulate vterm.Term.Write reporting a recovered emulator panic.
+func (s *fakeScreen) setWriteErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeErr = err
 }
 
 func (s *fakeScreen) consumedBytes() string {

@@ -24,6 +24,13 @@ type sessionOpts struct {
 	// newPane builds a pane. Nil means the production factory (startPane);
 	// tests inject a fake so session/window logic runs without a real shell.
 	newPane paneFactory
+
+	// logf reports unusual daemon-side conditions (a recovered emulator
+	// panic, a goroutine that had to be saved by recoverAndLog) without
+	// crashing anything to surface them. Filled in by newServer from
+	// Server.log.Printf; nil-safe, so it can be left unset in tests that
+	// don't care about this output.
+	logf func(format string, args ...any)
 }
 
 // session is a named workspace holding an ordered list of windows, one of
@@ -105,7 +112,7 @@ func newSession(name string, cols, rows int, opts sessionOpts, onEmpty func(stri
 // the session is not yet shared).
 func (s *session) spawnWindow(cols, rows int) (*window, error) {
 	w, err := newWindow(s.nextWin(), s.defaultWindowName(), s.nextPane(), cols, rows,
-		s.opts.defaultShell, s.opts.historyLimit, s.opts.newPane)
+		s.opts.defaultShell, s.opts.historyLimit, s.opts.newPane, s.opts.logf)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +140,7 @@ func (s *session) breakPane() error {
 		return fmt.Errorf("break-pane: the window has only one pane")
 	}
 	nw := wrapWindow(s.nextWin(), s.defaultWindowName(), p, s.opts.defaultShell,
-		s.opts.historyLimit, s.opts.newPane)
+		s.opts.historyLimit, s.opts.newPane, s.opts.logf)
 	s.windows = append(s.windows, nw)
 	s.cur = len(s.windows) - 1
 	nw.applyLayout(cols, rows)
@@ -231,21 +238,7 @@ func (s *session) reap() {
 		case <-s.dead:
 			return
 		case p := <-s.paneExit:
-			s.mu.Lock()
-			if w := p.win; w != nil {
-				w.removePane(p.id, s.cols, s.contentRows())
-				if len(w.panes) == 0 {
-					s.removeWindow(w)
-				}
-				// The tree changed off the command path, so nothing else has
-				// marked the session dirty: force the next frame so the client
-				// drops the closed pane instead of waiting for the survivor to
-				// emit output.
-				s.needsRepaint = true
-			}
-			empty := len(s.windows) == 0
-			s.mu.Unlock()
-			if empty {
+			if s.reapOne(p) {
 				if s.onEmpty != nil {
 					s.onEmpty(s.name)
 				}
@@ -253,6 +246,30 @@ func (s *session) reap() {
 			}
 		}
 	}
+}
+
+// reapOne processes one exited pane's cleanup and reports whether the session
+// is now empty (reap should stop). It is split out of reap, with its own
+// deferred recover, so a panic while folding the pane out of the layout is
+// logged and this exit is skipped instead of killing the reap goroutine —
+// which would silently stop reaping every future exit in this session,
+// leaking every pane that exits afterward. s.mu is released via defer rather
+// than an explicit unlock so a recovered panic can never leave it held.
+func (s *session) reapOne(p *pane) (empty bool) {
+	defer recoverAndLog(s.opts.logf, "session reap")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w := p.win; w != nil {
+		w.removePane(p.id, s.cols, s.contentRows())
+		if len(w.panes) == 0 {
+			s.removeWindow(w)
+		}
+		// The tree changed off the command path, so nothing else has marked
+		// the session dirty: force the next frame so the client drops the
+		// closed pane instead of waiting for the survivor to emit output.
+		s.needsRepaint = true
+	}
+	return len(s.windows) == 0
 }
 
 // removeWindow drops w from the list by identity and clamps cur. Caller holds mu.

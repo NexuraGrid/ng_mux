@@ -16,6 +16,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -268,9 +270,87 @@ func runDaemon(ep ipc.Endpoint) error {
 	// tell it is nested and refuse (see refuseIfNested).
 	_ = os.Setenv(nestGuardEnv, ep.Name)
 
+	// The daemon's stdio goes to os.DevNull (see spawnDaemon) so a crash used
+	// to leave no trace at all unless NGMUX_DEBUG happened to be set for that
+	// run. Always log to a file instead: NGMUX_DEBUG additionally mirrors to
+	// stderr, for someone running `__server` by hand in a terminal.
 	logger := log.New(io.Discard, "", 0)
-	if os.Getenv("NGMUX_DEBUG") != "" {
+	debugOn := os.Getenv("NGMUX_DEBUG") != ""
+	if logFile, err := openDaemonLog(ep.Name); err == nil {
+		w := io.Writer(logFile)
+		if debugOn {
+			w = io.MultiWriter(logFile, os.Stderr)
+		}
+		logger = log.New(w, "ngmuxd ", log.LstdFlags)
+		// Route unrecovered fatal panics (the ones nothing in the codebase
+		// could plausibly recover from, e.g. a runtime-detected data race or
+		// an out-of-memory) to the same file, so their stack trace is not
+		// lost the moment stdio goes to /dev/null.
+		_ = debug.SetCrashOutput(logFile, debug.CrashOptions{})
+	} else if debugOn {
+		// No log file (e.g. UserCacheDir unavailable): fall back to the
+		// previous behavior rather than running completely silent.
 		logger = log.New(os.Stderr, "ngmuxd ", log.LstdFlags)
 	}
 	return server.Run(ep, 80, 24, logger)
+}
+
+// maxDaemonLogSize is the size threshold, checked once at startup, past which
+// the daemon's log file is truncated instead of appended to forever.
+const maxDaemonLogSize = 5 * 1024 * 1024 // 5 MiB
+
+// daemonLogPath returns the path to the daemon's persistent log file for the
+// named endpoint: <cacheDir>/ngmux/ngmuxd-<sanitized name>.log. cacheDir is a
+// parameter (rather than calling os.UserCacheDir() here) so tests can point
+// it at a t.TempDir() instead of the real user cache directory.
+func daemonLogPath(cacheDir, epName string) string {
+	return filepath.Join(cacheDir, "ngmux", "ngmuxd-"+sanitizeLogName(epName)+".log")
+}
+
+// sanitizeLogName keeps an endpoint name safe to use as a file name
+// component: only letters, digits, '-' and '_' survive; everything else
+// (path separators in particular, since ep.Name is not validated as a bare
+// filename anywhere upstream) becomes '_'.
+func sanitizeLogName(name string) string {
+	if name == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// openDaemonLogFile opens (creating if needed) the log file at path for
+// appending, truncating it first if it has already grown past
+// maxDaemonLogSize. It creates the parent directory (0o700) and the file
+// itself (0o600) if they don't exist yet.
+func openDaemonLogFile(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > maxDaemonLogSize {
+		if err := os.Truncate(path, 0); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+}
+
+// openDaemonLog opens the daemon's log file for ep.Name under the OS user
+// cache directory. Any failure (cache dir unavailable, permission denied, ...)
+// is returned so the caller can fall back to the previous silent-unless-debug
+// behavior rather than failing the whole daemon over logging.
+func openDaemonLog(epName string) (*os.File, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	return openDaemonLogFile(daemonLogPath(cacheDir, epName))
 }

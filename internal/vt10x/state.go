@@ -702,6 +702,17 @@ func (t *State) setAttr(attr []int) {
 }
 
 func (t *State) insertBlanks(n int) {
+	// Defense in depth: csi.go clamps every parsed CSI parameter to
+	// [0, 65535] before it reaches a handler, but insertBlanks derives a
+	// slice range from n, so it also enforces its own sane bound here rather
+	// than trust the caller. n < 1 behaves like the ECMA-48 default of one
+	// column; n > cols can never insert more than a full line's width.
+	if n < 1 {
+		n = 1
+	}
+	if n > t.cols {
+		n = t.cols
+	}
 	src := t.cur.X
 	dst := src + n
 	size := t.cols - dst
@@ -731,6 +742,15 @@ func (t *State) deleteLines(n int) {
 }
 
 func (t *State) deleteChars(n int) {
+	// Defense in depth: see the identical note in insertBlanks. Without this,
+	// a negative n (e.g. from "\x1b[-5P") makes src negative, and the copy
+	// below slices past the end of the line: "slice bounds out of range".
+	if n < 1 {
+		n = 1
+	}
+	if n > t.cols {
+		n = t.cols
+	}
 	src := t.cur.X + n
 	dst := t.cur.X
 	size := t.cols - src

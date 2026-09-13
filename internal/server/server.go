@@ -55,6 +55,10 @@ func newServer(ep ipc.Endpoint, initCols, initRows int, logger *log.Logger, opts
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
+	// Every session/window/pane created under opts logs through the same
+	// daemon logger, so a recovered panic anywhere is visible in the same
+	// place regardless of which pane or connection it came from.
+	opts.logf = logger.Printf
 	return &Server{
 		ep:         ep,
 		log:        logger,
@@ -229,7 +233,17 @@ func (s *Server) acceptLoop() {
 	}
 }
 
+// handleConn is spawned per accepted connection by acceptLoop. The deferred
+// recover covers this whole goroutine, including serveClient (called
+// synchronously below for an attach): a panic anywhere in one client's
+// request handling must never take every other session and client down with
+// it. Cleanup on a recovered panic is best-effort — the per-branch and
+// serveClient defers (removeClient -> client.close -> pc.Close) run as usual
+// when the panic originates inside them, but a panic before any of those run
+// can leak this one connection, which is a far smaller problem than crashing
+// the daemon.
 func (s *Server) handleConn(conn net.Conn) {
+	defer recoverAndLog(s.log.Printf, "handleConn")
 	pc := protocol.NewConn(conn)
 	first, err := pc.Read()
 	if err != nil {
@@ -423,65 +437,87 @@ func (s *Server) broadcastLoop() {
 		case <-s.done:
 			return
 		case <-t.C:
-			s.mu.Lock()
-			if len(s.clients) == 0 {
-				s.mu.Unlock()
-				continue
-			}
-			clients := make([]*client, 0, len(s.clients))
-			for c := range s.clients {
-				clients = append(clients, c)
-			}
-			sessions := make(map[string]*session, len(s.sessions))
-			for k, v := range s.sessions {
-				sessions[k] = v
-			}
-			s.mu.Unlock()
+			s.tick()
+		}
+	}
+}
 
-			nowMin := time.Now().Minute()
-			clockTick := nowMin != s.lastMinute
-			s.lastMinute = nowMin
+// tick renders and sends one frame to every attached client. It is split out
+// of broadcastLoop, with its own deferred recover, so a panic while composing
+// or sending a frame (a corrupted snapshot, a bug in render.Paint) is logged
+// and skipped for this tick instead of killing the ticker goroutine outright,
+// which would freeze every attached client's screen with no diagnostic ever
+// printed.
+func (s *Server) tick() {
+	defer recoverAndLog(s.log.Printf, "broadcastLoop tick")
 
-			// Group clients by the session they are viewing so each session's
-			// frame is composed at most once per tick.
-			bySession := make(map[string][]*client, len(sessions))
-			for _, c := range clients {
-				name := c.session()
-				bySession[name] = append(bySession[name], c)
-			}
+	clients, sessions, ok := s.tickSnapshot()
+	if !ok {
+		return
+	}
 
-			for name, viewers := range bySession {
-				sess := sessions[name]
-				if sess == nil {
-					continue
+	nowMin := time.Now().Minute()
+	clockTick := nowMin != s.lastMinute
+	s.lastMinute = nowMin
+
+	// Group clients by the session they are viewing so each session's frame
+	// is composed at most once per tick.
+	bySession := make(map[string][]*client, len(sessions))
+	for _, c := range clients {
+		name := c.session()
+		bySession[name] = append(bySession[name], c)
+	}
+
+	for name, viewers := range bySession {
+		sess := sessions[name]
+		if sess == nil {
+			continue
+		}
+		need := clockTick || sess.dirty()
+		if !need {
+			for _, c := range viewers {
+				if c.takePrev() == nil { // fresh attach / reset / resize
+					need = true
+					break
 				}
-				need := clockTick || sess.dirty()
-				if !need {
-					for _, c := range viewers {
-						if c.takePrev() == nil { // fresh attach / reset / resize
-							need = true
-							break
-						}
-					}
-				}
-				if !need {
-					continue
-				}
+			}
+		}
+		if !need {
+			continue
+		}
 
-				frame := sess.frame()
-				for _, c := range viewers {
-					prev := c.takePrev()
-					data := render.Paint(prev, frame)
-					c.setPrev(frame)
-					if len(data) > 0 {
-						if !c.send(protocol.Message{Type: protocol.TypeFrame, Data: data}) {
-							c.reset() // dropped: full repaint next tick
-						}
-					}
+		frame := sess.frame()
+		for _, c := range viewers {
+			prev := c.takePrev()
+			data := render.Paint(prev, frame)
+			c.setPrev(frame)
+			if len(data) > 0 {
+				if !c.send(protocol.Message{Type: protocol.TypeFrame, Data: data}) {
+					c.reset() // dropped: full repaint next tick
 				}
 			}
 		}
 	}
+}
+
+// tickSnapshot copies out the client list and session map under s.mu, using a
+// defer so the lock is released even if a panic happens mid-copy. ok is false
+// when there is nothing to do this tick (no attached clients).
+func (s *Server) tickSnapshot() (clients []*client, sessions map[string]*session, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.clients) == 0 {
+		return nil, nil, false
+	}
+	clients = make([]*client, 0, len(s.clients))
+	for c := range s.clients {
+		clients = append(clients, c)
+	}
+	sessions = make(map[string]*session, len(s.sessions))
+	for k, v := range s.sessions {
+		sessions[k] = v
+	}
+	return clients, sessions, true
 }
 
 // markDirty flags a session so the broadcaster rebuilds its frame on the next
