@@ -5,6 +5,7 @@
 package e2e
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,26 @@ type harness struct {
 	cliErr chan error
 	mu     sync.Mutex
 	buf    strings.Builder
+	logs   lockedBuffer // the daemon's log output
+}
+
+// lockedBuffer collects the daemon log, which is written from many goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// logText returns everything the daemon has logged so far.
+func (h *harness) logText() string {
+	h.logs.mu.Lock()
+	defer h.logs.mu.Unlock()
+	return h.logs.buf.String()
 }
 
 func newHarness(t *testing.T) *harness {
@@ -87,7 +108,7 @@ func newHarness(t *testing.T) *harness {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}()
-		h.srvErr <- server.Run(ep, 80, 24, nil)
+		h.srvErr <- server.Run(ep, 80, 24, log.New(&h.logs, "", log.LstdFlags))
 	}()
 
 	select {
