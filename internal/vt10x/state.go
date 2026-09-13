@@ -110,12 +110,20 @@ type State struct {
 	tabs          []bool
 	title         string
 	colorOverride map[Color]Color
+
+	// onScrollOut, when set, is called with each line as it leaves the top of
+	// the screen: a full-screen scroll on the main buffer (bottom-margin
+	// linefeed, IND, CSI S) or a resize shrink sliding lines off the top. It
+	// never fires for DL, a partial DECSTBM region, or the alternate screen.
+	// The callee must copy the slice; it is invalid once the call returns.
+	onScrollOut func(line []Glyph)
 }
 
-func newState(w io.Writer) *State {
+func newState(w io.Writer, onScrollOut func(line []Glyph)) *State {
 	return &State{
 		w:             w,
 		colorOverride: make(map[Color]Color),
+		onScrollOut:   onScrollOut,
 	}
 }
 
@@ -242,7 +250,7 @@ func (t *State) newline(firstCol bool) {
 	if y == t.bottom {
 		cur := t.cur
 		t.cur = t.defaultCursor()
-		t.scrollUp(t.top, 1)
+		t.scrollUpHistory(1)
 		t.cur = cur
 	} else {
 		y++
@@ -319,6 +327,15 @@ func (t *State) resize(cols, rows int) bool {
 	}
 	slide := t.cur.Y - rows + 1
 	if slide > 0 {
+		// t.lines is the main screen's buffer only while the alt screen is
+		// not active (swapScreen swaps the two pointers), so only emit then;
+		// otherwise cur.Y belongs to the alt screen and says nothing about
+		// where the (inactive) main screen's content is scrolling.
+		if t.onScrollOut != nil && t.mode&ModeAltScreen == 0 {
+			for i := 0; i < slide; i++ {
+				t.onScrollOut(t.lines[i])
+			}
+		}
 		copy(t.lines, t.lines[slide:slide+rows])
 		copy(t.altLines, t.altLines[slide:slide+rows])
 	}
@@ -481,6 +498,24 @@ func (t *State) scrollDown(orig, n int) {
 	}
 
 	// TODO: selection scroll
+}
+
+// scrollUpHistory scrolls up n lines like scrollUp, but first feeds the lines
+// leaving the top of the screen to onScrollOut when this is a genuine
+// "content moves off the top" scroll: the main screen is active and the
+// scroll region spans the whole screen (top==0, bottom==rows-1). Only call
+// sites that always scroll the full region from row 0 (bottom-margin
+// linefeed, IND, CSI S) should use this — scrollUp itself stays generic so a
+// partial DECSTBM region or DL (which scrolls from the cursor row, not
+// necessarily the top) never populates scrollback.
+func (t *State) scrollUpHistory(n int) {
+	if t.onScrollOut != nil && t.mode&ModeAltScreen == 0 && t.top == 0 && t.bottom == t.rows-1 {
+		emit := clamp(n, 0, t.bottom-t.top+1)
+		for i := 0; i < emit; i++ {
+			t.onScrollOut(t.lines[i])
+		}
+	}
+	t.scrollUp(t.top, n)
 }
 
 func (t *State) scrollUp(orig, n int) {

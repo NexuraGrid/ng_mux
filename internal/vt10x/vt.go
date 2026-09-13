@@ -58,8 +58,9 @@ type View interface {
 type TerminalOption func(*TerminalInfo)
 
 type TerminalInfo struct {
-	w          io.Writer
-	cols, rows int
+	w           io.Writer
+	cols, rows  int
+	onScrollOut func(ln []Glyph)
 }
 
 func WithWriter(w io.Writer) TerminalOption {
@@ -72,6 +73,15 @@ func WithSize(cols, rows int) TerminalOption {
 	return func(info *TerminalInfo) {
 		info.cols = cols
 		info.rows = rows
+	}
+}
+
+// WithScrollback registers a hook called with each line as it scrolls off the
+// top of the main screen (see State.onScrollOut for the exact conditions).
+// The callee must not retain the slice; copy it before returning if needed.
+func WithScrollback(fn func(ln []Glyph)) TerminalOption {
+	return func(info *TerminalInfo) {
+		info.onScrollOut = fn
 	}
 }
 
