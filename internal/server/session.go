@@ -311,24 +311,34 @@ func (s *session) resize(cols, rows int) {
 // yanked is the text a copy-mode yank just produced, for the caller to mirror
 // to the OS clipboard (empty otherwise).
 func (s *session) input(data []byte) (repaint bool, yanked string) {
-	s.mu.Lock()
-	var p *pane
-	if w := s.current(); w != nil {
-		p = w.panes[w.active]
-	}
-	if p != nil && p.copy != nil {
-		text, _ := p.copyKey(data)
-		if text != "" {
-			s.pasteBuf = text
-		}
-		s.mu.Unlock()
+	p, inCopy, text := s.routeInput(data)
+	if inCopy {
 		return true, text
 	}
-	s.mu.Unlock()
 	if p != nil {
 		_, _ = p.pt.Write(data)
 	}
 	return false, ""
+}
+
+// routeInput is input's locked half: it feeds data to copy-mode when the
+// focused pane is in it, and otherwise returns the pane whose pty should get
+// the bytes. The pty write stays outside the lock. mu is released with defer so
+// a recovered panic in copy-mode handling can never leave the session locked.
+func (s *session) routeInput(data []byte) (p *pane, inCopy bool, yanked string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w := s.current(); w != nil {
+		p = w.panes[w.active]
+	}
+	if p == nil || p.copy == nil {
+		return p, false, ""
+	}
+	text, _ := p.copyKey(data)
+	if text != "" {
+		s.pasteBuf = text
+	}
+	return p, true, text
 }
 
 // current returns the current window, or nil if the session has none. Caller
@@ -379,26 +389,32 @@ func (s *session) stepWindow(delta int) {
 // the session is "clean" until something changes again. Only ever called from
 // the broadcast goroutine.
 func (s *session) frame() *render.Frame {
-	s.mu.Lock()
-	s.needsRepaint = false
-	cols, rows := s.cols, s.rows
-	content := s.contentRows()
-	w := s.current()
-	showNums := time.Now().Before(s.displayPanesUntil)
-	s.panesShown = showNums
-	var views []render.PaneView
-	if w != nil {
-		views, s.snapScratch = w.views(cols, content, showNums, s.viewScratch[:0], s.snapScratch)
-		s.viewScratch = views
-	}
-	status := s.buildStatus(cols)
-	style := render.StatusStyle{FG: s.opts.statusFG, BG: s.opts.statusBG}
-	s.mu.Unlock()
-
+	cols, rows, views, status, style := s.frameInputs()
 	f := render.ComposeStyledInto(s.frameBuf[s.frameIdx], cols, rows, views, status, style)
 	s.frameBuf[s.frameIdx] = f
 	s.frameIdx ^= 1
 	return f
+}
+
+// frameInputs is frame's locked half: it snapshots the panes and builds the
+// status bar under mu, released with defer so a recovered panic while building
+// a view can never leave the session locked (which would freeze its input and
+// every later frame).
+func (s *session) frameInputs() (cols, rows int, views []render.PaneView, status []render.StatusSegment, style render.StatusStyle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.needsRepaint = false
+	cols, rows = s.cols, s.rows
+	content := s.contentRows()
+	showNums := time.Now().Before(s.displayPanesUntil)
+	s.panesShown = showNums
+	if w := s.current(); w != nil {
+		views, s.snapScratch = w.views(cols, content, showNums, s.viewScratch[:0], s.snapScratch)
+		s.viewScratch = views
+	}
+	status = s.buildStatus(cols)
+	style = render.StatusStyle{FG: s.opts.statusFG, BG: s.opts.statusBG}
+	return cols, rows, views, status, style
 }
 
 // dirty reports whether the next frame would differ from the last one frame()
