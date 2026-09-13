@@ -267,17 +267,21 @@ func cmdSendKeys(c *cmdCtx) (string, error) {
 	if len(data) == 0 {
 		return "", nil
 	}
-	return "", c.sess.withWindow(func(w *window, _, _ int) error {
+	var target *pane
+	_ = c.sess.withWindow(func(w *window, _, _ int) error {
 		ids := layout.Panes(w.tree)
-		p := w.panes[w.active]
+		target = w.panes[w.active]
 		if c.pane >= 0 && c.pane < len(ids) {
-			p = w.panes[ids[c.pane]]
-		}
-		if p != nil {
-			_, _ = p.pt.Write(data)
+			target = w.panes[ids[c.pane]]
 		}
 		return nil
 	})
+	// Write outside the session lock: a child that is not reading its stdin
+	// can block this for as long as it likes.
+	if target != nil {
+		_, _ = target.pt.Write(data)
+	}
+	return "", nil
 }
 
 // displayPanesTime is how long the per-pane index badges stay up, matching
@@ -299,14 +303,17 @@ func cmdCopyMode(c *cmdCtx) (string, error) {
 }
 
 func cmdPasteBuffer(c *cmdCtx) (string, error) {
+	var target *pane
 	c.sess.mu.Lock()
-	defer c.sess.mu.Unlock()
-	w := c.sess.current()
-	if w == nil || c.sess.pasteBuf == "" {
-		return "", nil
+	buf := c.sess.pasteBuf
+	if w := c.sess.current(); w != nil && buf != "" {
+		target = w.panes[w.active]
 	}
-	if p := w.panes[w.active]; p != nil {
-		_, _ = p.pt.Write([]byte(c.sess.pasteBuf))
+	c.sess.mu.Unlock()
+	// Write outside the session lock, like send-keys: a large paste into a
+	// child that is not reading would otherwise freeze the session.
+	if target != nil {
+		_, _ = target.pt.Write([]byte(buf))
 	}
 	return "", nil
 }
