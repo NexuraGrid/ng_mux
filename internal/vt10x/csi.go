@@ -6,6 +6,13 @@ import (
 	"strings"
 )
 
+// Device-attribute responses answered by handleCSI's 'c' case. Reported "T" =
+// tmux, matching what tmux itself reports for its secondary DA.
+var (
+	primaryDAResponse   = []byte("\x1b[?1;2c")
+	secondaryDAResponse = []byte("\x1b[>84;0;0c")
+)
+
 // CSI (Control Sequence Introducer)
 // ESC+[
 type csiEscape struct {
@@ -13,6 +20,7 @@ type csiEscape struct {
 	args []int
 	mode byte
 	priv bool
+	gt   bool // leading '>' marker, e.g. secondary DA: "ESC[>c", "ESC[>0c"
 }
 
 func (c *csiEscape) reset() {
@@ -20,6 +28,7 @@ func (c *csiEscape) reset() {
 	c.args = c.args[:0]
 	c.mode = 0
 	c.priv = false
+	c.gt = false
 }
 
 func (c *csiEscape) put(b byte) bool {
@@ -38,8 +47,15 @@ func (c *csiEscape) parse() {
 	}
 	s := string(c.buf)
 	c.args = c.args[:0]
-	if s[0] == '?' {
+	switch s[0] {
+	case '?':
 		c.priv = true
+		s = s[1:]
+	case '>':
+		// Secondary-DA / private '>' marker (e.g. "ESC[>c"). Stripped the same
+		// way as '?' so the remaining digits parse normally instead of
+		// tripping strconv.Atoi on a leading '>' and silently truncating args.
+		c.gt = true
 		s = s[1:]
 	}
 	s = s[:len(s)-1]
@@ -102,8 +118,18 @@ func (t *State) handleCSI() {
 	case 'B', 'e': // CUD, VPR - cursor <n> down
 		t.moveTo(t.cur.X, t.cur.Y+c.maxarg(0, 1))
 	case 'c': // DA - device attributes
-		if c.arg(0, 0) == 0 {
-			// TODO: write vt102 id
+		// A shell such as fish sends a Primary DA request on startup and
+		// blocks for ~10s if nothing replies, then runs degraded. Answering
+		// here (rather than by scanning raw pty bytes upstream in vterm) means
+		// the query is recognized correctly even when it arrives split across
+		// two separate Write calls: t.state carries the parser across calls,
+		// so "ESC[" in one Write and "c" in the next still reach this case.
+		// The responses mirror what tmux reports; Ps is otherwise ignored, as
+		// real terminals do.
+		if c.gt {
+			t.w.Write(secondaryDAResponse)
+		} else {
+			t.w.Write(primaryDAResponse)
 		}
 	case 'C', 'a': // CUF, HPR - cursor <n> forward
 		t.moveTo(t.cur.X+c.maxarg(0, 1), t.cur.Y)

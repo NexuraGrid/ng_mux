@@ -46,6 +46,8 @@ func (s *blockingScreen) Snapshot() vterm.Snapshot {
 	return sn
 }
 
+func (s *blockingScreen) Close() {}
+
 func (s *blockingScreen) SnapshotInto(dst *vterm.Snapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

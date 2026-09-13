@@ -14,7 +14,6 @@
 package vterm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -41,7 +40,10 @@ var ErrEmulatorPanic = errors.New("vterm: recovered panic in terminal emulator")
 // device-query responses (DA, DSR, ...) and to feed onScrollOut every line
 // that scrolls off the top of the main screen. It is the single constructor
 // used by both New and Write's panic-recovery path, so a freshly recovered
-// emulator never loses its scrollback capture wiring.
+// emulator never loses its scrollback capture wiring. reply is whatever
+// vt10x should write query responses to — always Term.replyQ (the async
+// queue), never the real pty master directly, and never reconstructed on
+// panic recovery so replies keep flowing through the same goroutine.
 func newEmulator(cols, rows int, reply io.Writer, onScrollOut func(ln []vt10x.Glyph)) vt10x.Terminal {
 	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows), vt10x.WithScrollback(onScrollOut)}
 	if reply != nil {
@@ -115,7 +117,10 @@ type Term struct {
 	cols int
 	rows int
 
-	reply io.Writer // pty master: where query responses (DA, DSR) are written
+	// replyQ asynchronously delivers query responses (DA, DSR, ...) to the
+	// pty master passed to New, in order. nil when that pty master was nil,
+	// disabling replies entirely.
+	replyQ *replyQueue
 
 	// histBuf is a ring buffer holding the scrollback: oldest line at
 	// histHead, histLen of its len(histBuf) (== histCap) slots in use. Each
@@ -157,7 +162,8 @@ type Term struct {
 // New creates an emulator of the given size. reply receives the bytes the
 // emulator emits in response to device queries (cursor position reports, device
 // attributes, ...) and should normally be the pty master so the child program
-// sees the answers.
+// sees the answers. Those writes are asynchronous (see replyQueue): New itself
+// never blocks, and neither does Write, no matter how reply behaves.
 func New(cols, rows int, reply io.Writer) *Term {
 	if cols <= 0 {
 		cols = 80
@@ -165,35 +171,37 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if rows <= 0 {
 		rows = 24
 	}
-	t := &Term{reply: reply, cols: cols, rows: rows, histCap: 2000}
+	t := &Term{cols: cols, rows: rows, histCap: 2000}
 	t.dirty.Store(true)
 	t.histBuf = make([][]Cell, t.histCap)
-	t.t = newEmulator(cols, rows, reply, t.pushHistory)
+	if reply != nil {
+		t.replyQ = newReplyQueue(reply)
+	}
+	t.t = newEmulator(cols, rows, t.queueWriter(), t.pushHistory)
 	return t
 }
 
-// Device-attribute query/response pairs. vt10x answers DSR (cursor position,
-// status) itself but leaves DA a stub, so we answer it here: a shell such as
-// fish sends a Primary DA request on startup and blocks for ~10s if nothing
-// replies, then runs degraded. The responses mirror what tmux reports.
-var deviceQueries = []struct{ query, response []byte }{
-	{[]byte("\x1b[c"), []byte("\x1b[?1;2c")},      // Primary DA
-	{[]byte("\x1b[0c"), []byte("\x1b[?1;2c")},     // Primary DA, explicit 0
-	{[]byte("\x1b[>c"), []byte("\x1b[>84;0;0c")},  // Secondary DA ('T' = tmux)
-	{[]byte("\x1b[>0c"), []byte("\x1b[>84;0;0c")}, // Secondary DA, explicit 0
+// queueWriter returns the writer vt10x (and, previously, vterm itself) should
+// use for query replies: the async queue when replies are enabled, or a bare
+// nil when they are not. It must return a true nil, not an io.Writer holding
+// a nil *replyQueue — an interface value like that is itself non-nil, which
+// would defeat newEmulator's "reply != nil" check and have vt10x call Write
+// on a nil *replyQueue.
+func (t *Term) queueWriter() io.Writer {
+	if t.replyQ == nil {
+		return nil
+	}
+	return t.replyQ
 }
 
-// answerDeviceQueries scans a pty payload for terminal-identification requests
-// vt10x ignores and writes the canned response for each one found. Caller holds
-// t.mu.
-func (t *Term) answerDeviceQueries(p []byte) {
-	if t.reply == nil || bytes.IndexByte(p, 0x1b) < 0 {
-		return
-	}
-	for _, q := range deviceQueries {
-		if bytes.Contains(p, q.query) {
-			_, _ = t.reply.Write(q.response)
-		}
+// Close stops the asynchronous reply-delivery goroutine, if replies were ever
+// enabled and one was started. Idempotent, and safe to call on a Term created
+// with a nil reply writer (there is then nothing to stop). Callers should
+// close a Term once it is done receiving pty output, typically alongside
+// closing the pty itself.
+func (t *Term) Close() {
+	if t.replyQ != nil {
+		t.replyQ.Close()
 	}
 }
 
@@ -244,7 +252,7 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	// goroutine.
 	defer func() {
 		if r := recover(); r != nil {
-			t.t = newEmulator(t.cols, t.rows, t.reply, t.pushHistory)
+			t.t = newEmulator(t.cols, t.rows, t.queueWriter(), t.pushHistory)
 			t.dirty.Store(true)
 			t.pending = t.pending[:0]
 			err = fmt.Errorf("%w: %v\n%s", ErrEmulatorPanic, r, debug.Stack())
@@ -255,7 +263,6 @@ func (t *Term) Write(p []byte) (n int, err error) {
 		return 0, nil
 	}
 	t.dirty.Store(true)
-	t.answerDeviceQueries(p)
 
 	buf := p
 	if len(t.pending) > 0 {

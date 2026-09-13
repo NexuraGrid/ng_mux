@@ -6,23 +6,14 @@ import (
 	"time"
 )
 
-// panicyWriter is an io.Writer that panics on every Write. Used as the reply
-// writer so a CPR query ("\x1b[6n") forces vt10x to panic from inside its own
-// locked Write: vt10x answers a cursor-position report by writing directly to
-// the reply writer while it still holds its internal state mutex.
-type panicyWriter struct{}
-
-func (panicyWriter) Write(p []byte) (int, error) {
-	panic("boom: reply writer exploded")
-}
-
-// TestWriteRecoversEmulatorPanic forces a panic inside Term.Write (via a
-// reply writer that panics answering a CPR query) and asserts: the panic
-// never escapes Write, the returned error matches ErrEmulatorPanic via
-// errors.Is, scrollback history survives the emulator swap, and the Term
-// keeps working afterwards (proving t.mu was not left locked).
+// TestWriteRecoversEmulatorPanic forces a panic inside Term.Write (via an
+// emulator that panics on its next Write, see forcePanicOnNextWrite) and
+// asserts: the panic never escapes Write, the returned error matches
+// ErrEmulatorPanic via errors.Is, scrollback history survives the emulator
+// swap, and the Term keeps working afterwards (proving t.mu was not left
+// locked).
 func TestWriteRecoversEmulatorPanic(t *testing.T) {
-	term := New(20, 4, panicyWriter{})
+	term := New(20, 4, nil)
 	term.SetHistoryLimit(100)
 
 	// Scroll some lines into history before forcing the panic, so we can
@@ -37,7 +28,8 @@ func TestWriteRecoversEmulatorPanic(t *testing.T) {
 		t.Fatal("setup: expected some scrollback before forcing a panic")
 	}
 
-	_, err := writeWithTimeout(t, term, []byte("\x1b[6n"))
+	forcePanicOnNextWrite(term)
+	_, err := writeWithTimeout(t, term, []byte("boom"))
 	if err == nil {
 		t.Fatal("Write returned no error after the emulator panicked")
 	}

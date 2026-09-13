@@ -42,6 +42,9 @@ type screen interface {
 	// used to decide whether a mouse event should be forwarded to the pane's
 	// own app instead of driving copy-mode.
 	InputModes() vterm.InputModes
+	// Close stops the emulator's asynchronous reply-delivery goroutine (see
+	// vterm.Term.Close). Called once the pane's pty is closed.
+	Close()
 }
 
 // paneFactory builds a pane for a window. Injected through sessionOpts so tests
@@ -178,4 +181,5 @@ func (p *pane) copyKey(data []byte) (yank string, exited bool) {
 
 func (p *pane) close() {
 	_ = p.pt.Close()
+	p.vt.Close()
 }
