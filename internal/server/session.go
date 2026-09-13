@@ -54,6 +54,14 @@ type session struct {
 	drag       dragState   // in-progress mouse border drag
 	statusHits []statusHit // clickable status-bar regions, rebuilt each frame
 
+	// mouseFwd is the pane a press started forwarding mouse reports to (0
+	// when no forwarded press is in progress). It is set by routePress and
+	// consulted by routeDrag/routeRelease so a drag or release that strays
+	// off the pane's rectangle (or off any pane at all) still reaches the
+	// same app the press did, matching how a real terminal tracks a button
+	// once it goes down.
+	mouseFwd layout.PaneID
+
 	// needsRepaint forces the next frame even if no pane produced output
 	// (a command changed focus, layout, a window name, ...). frame() clears it.
 	needsRepaint bool

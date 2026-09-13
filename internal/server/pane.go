@@ -34,6 +34,14 @@ type screen interface {
 	// Dirty reports whether bytes have arrived (or a resize happened) since the
 	// last Snapshot. The broadcaster uses it to skip idle sessions entirely.
 	Dirty() bool
+	// ScrolledTotal is the number of lines ever pushed into history (never
+	// reset by eviction). copyState.sync uses it to keep an anchored
+	// copy-mode view fixed while more output arrives.
+	ScrolledTotal() uint64
+	// InputModes reports the app's current mouse/alt-screen/app-cursor modes,
+	// used to decide whether a mouse event should be forwarded to the pane's
+	// own app instead of driving copy-mode.
+	InputModes() vterm.InputModes
 }
 
 // paneFactory builds a pane for a window. Injected through sessionOpts so tests
@@ -140,6 +148,15 @@ func (p *pane) resize(cols, rows int) {
 	}
 }
 
+// syncCopy re-anchors the pane's copy-mode offset (see copyState.sync) against
+// however many lines have been pushed into history since it was last synced.
+// A no-op when the pane is not in copy-mode.
+func (p *pane) syncCopy() {
+	if p.copy != nil {
+		p.copy.sync(p.vt.ScrolledTotal(), p.vt.HistoryLen())
+	}
+}
+
 // copyKey feeds one key chunk to copy-mode. It returns the text to store in the
 // paste buffer (empty unless the key was a yank) and whether copy-mode ended.
 func (p *pane) copyKey(data []byte) (yank string, exited bool) {
@@ -147,6 +164,7 @@ func (p *pane) copyKey(data []byte) (yank string, exited bool) {
 	if cs == nil {
 		return "", false
 	}
+	p.syncCopy()
 	exit, doYank := cs.key(data, p.vt.HistoryLen())
 	if doYank {
 		snap := p.vt.ScrollbackView(cs.offset, cs.rows)

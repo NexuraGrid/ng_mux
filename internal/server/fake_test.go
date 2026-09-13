@@ -94,16 +94,18 @@ func (f *fakePty) Close() error {
 // fakeScreen is an in-memory stand-in for *vterm.Term. It records the bytes it
 // consumed and its size, and mimics the dirty/Snapshot contract.
 type fakeScreen struct {
-	mu         sync.Mutex
-	consumed   bytes.Buffer
-	writeSizes []int // len(p) for every Write call, in order; see pump chunking tests
-	cols, rows int
-	hist       int
-	histLimit  int
-	dirty      bool
-	fillCh     rune  // when non-zero, snapshots/scrollback return this in every cell
-	writeErr   error // when set, the next Write returns this error and clears it
-	snapPanic  bool  // when set, the next SnapshotInto panics and clears it
+	mu            sync.Mutex
+	consumed      bytes.Buffer
+	writeSizes    []int // len(p) for every Write call, in order; see pump chunking tests
+	cols, rows    int
+	hist          int
+	histLimit     int
+	scrolledTotal uint64
+	modes         vterm.InputModes
+	dirty         bool
+	fillCh        rune  // when non-zero, snapshots/scrollback return this in every cell
+	writeErr      error // when set, the next Write returns this error and clears it
+	snapPanic     bool  // when set, the next SnapshotInto panics and clears it
 }
 
 func newFakeScreen(cols, rows int) *fakeScreen {
@@ -228,6 +230,36 @@ func (s *fakeScreen) Dirty() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dirty
+}
+
+func (s *fakeScreen) ScrolledTotal() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scrolledTotal
+}
+
+// setScrolledTotal simulates lines pushed into history (see vterm.Term's
+// field of the same name) independently of setHistoryLen, so tests can
+// reproduce the ring-eviction case: total keeps growing past histLimit while
+// HistoryLen stays capped.
+func (s *fakeScreen) setScrolledTotal(n uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scrolledTotal = n
+}
+
+func (s *fakeScreen) InputModes() vterm.InputModes {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.modes
+}
+
+// setInputModes lets a test simulate an app enabling mouse reporting, the
+// alternate screen, or application-cursor mode.
+func (s *fakeScreen) setInputModes(m vterm.InputModes) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.modes = m
 }
 
 // fakeFleet is a paneFactory that hands out fake panes and keeps a handle on

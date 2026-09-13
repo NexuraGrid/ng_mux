@@ -21,6 +21,10 @@ type copyState struct {
 	rows   int // viewport height this mode was entered with
 	cols   int
 
+	// seen is vterm.Term.ScrolledTotal() as of the last sync (or as of
+	// entering copy-mode). See sync for why this anchors the view.
+	seen uint64
+
 	cx, cy int // copy cursor, in viewport coordinates
 
 	hasSel bool
@@ -29,6 +33,35 @@ type copyState struct {
 
 func newCopyState(cols, rows int) *copyState {
 	return &copyState{rows: rows, cols: cols, cx: 0, cy: rows - 1}
+}
+
+// sync re-anchors offset against however many lines were pushed into history
+// since the last sync, so the rows the user is looking at stay fixed while a
+// worker keeps printing (bug: without this, offset counts lines above the
+// live bottom, so it silently points further and further into the past as
+// the live bottom moves down). This holds even when offset is 0 at the
+// moment of syncing: entering copy-mode freezes the exact view the user had,
+// the same way tmux's copy-mode does, rather than continuing to track new
+// output like the live screen does.
+//
+// If the history ring is at capacity and eviction claims lines the user was
+// viewing, offset clamps to histLen and the view pins at the oldest line
+// still retained — a graceful degradation, not a crash, but the view can no
+// longer track the exact original lines past that point.
+func (c *copyState) sync(total uint64, histLen int) {
+	if total <= c.seen {
+		c.seen = total
+		return
+	}
+	delta := total - c.seen
+	c.seen = total
+	c.offset += int(delta)
+	if c.offset > histLen {
+		c.offset = histLen
+	}
+	if c.offset < 0 {
+		c.offset = 0
+	}
 }
 
 // selection returns the render selection for the current viewport, or nil.
