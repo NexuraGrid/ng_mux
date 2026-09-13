@@ -15,7 +15,6 @@ import (
 	"github.com/MauricioJC3/ng_mux/internal/config"
 	"github.com/MauricioJC3/ng_mux/internal/ipc"
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
-	"github.com/MauricioJC3/ng_mux/internal/render"
 )
 
 // frameInterval is how often the daemon repaints. ~33 fps is smooth for a
@@ -476,7 +475,7 @@ func (s *Server) tick() {
 		need := clockTick || sess.dirty()
 		if !need {
 			for _, c := range viewers {
-				if c.takePrev() == nil { // fresh attach / reset / resize
+				if c.needsFrame() { // fresh attach / reset / resize, or skipped while busy
 					need = true
 					break
 				}
@@ -488,14 +487,7 @@ func (s *Server) tick() {
 
 		frame := sess.frame()
 		for _, c := range viewers {
-			prev := c.takePrev()
-			data := render.Paint(prev, frame)
-			c.setPrev(frame)
-			if len(data) > 0 {
-				if !c.send(protocol.Message{Type: protocol.TypeFrame, Data: data}) {
-					c.reset() // dropped: full repaint next tick
-				}
-			}
+			c.offerFrame(frame)
 		}
 	}
 }
@@ -552,7 +544,9 @@ func (s *Server) removeClient(c *client) {
 	s.mu.Lock()
 	delete(s.clients, c)
 	s.mu.Unlock()
-	c.close()
+	// Let a bye queued just before returning (detach, kill-server) reach the
+	// wire before the connection closes.
+	c.closeAfterFlush(flushTimeout)
 }
 
 func (s *Server) shutdownAll() {
