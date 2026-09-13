@@ -26,6 +26,10 @@ func TestStressWorkersFloodWhileScrolling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress test; skipped in -short")
 	}
+	// Panes inherit the daemon's working directory. Query answers reach the
+	// shells as input, and one of them ("\x1b[>84;0;0c") reads as a redirect
+	// to a file named 84, so keep the shells out of the source tree.
+	t.Chdir(t.TempDir())
 	h := newHarness(t)
 	time.Sleep(300 * time.Millisecond)
 
