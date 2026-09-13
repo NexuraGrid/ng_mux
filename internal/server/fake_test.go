@@ -106,6 +106,7 @@ type fakeScreen struct {
 	fillCh        rune  // when non-zero, snapshots/scrollback return this in every cell
 	writeErr      error // when set, the next Write returns this error and clears it
 	snapPanic     bool  // when set, the next SnapshotInto panics and clears it
+	closed        bool  // set by Close, so tests can assert a pane closed its screen
 }
 
 func newFakeScreen(cols, rows int) *fakeScreen {
@@ -260,6 +261,20 @@ func (s *fakeScreen) setInputModes(m vterm.InputModes) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.modes = m
+}
+
+// Close records that the screen was closed, mimicking vterm.Term.Close.
+func (s *fakeScreen) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+}
+
+// isClosed reports whether Close has been called.
+func (s *fakeScreen) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 // fakeFleet is a paneFactory that hands out fake panes and keeps a handle on

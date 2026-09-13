@@ -163,13 +163,12 @@ func TestWideGlyphWidthSurvivesInHistory(t *testing.T) {
 	}
 }
 
-// TestPanicRecoveryKeepsCapturingScrollback reuses the panicking-reply-writer
-// trick from panic_test.go: a CPR query forces vt10x to panic while replying,
-// Write recovers and swaps in a fresh emulator. That fresh emulator must be
-// wired to the same scrollback hook, or capture silently stops forever after
-// the first recovered panic.
+// TestPanicRecoveryKeepsCapturingScrollback forces an emulator panic (see
+// forcePanicOnNextWrite); Write recovers and swaps in a fresh emulator. That
+// fresh emulator must be wired to the same scrollback hook, or capture
+// silently stops forever after the first recovered panic.
 func TestPanicRecoveryKeepsCapturingScrollback(t *testing.T) {
-	term := New(20, 4, panicyWriter{})
+	term := New(20, 4, nil)
 	term.SetHistoryLimit(100)
 
 	for i := 0; i < 20; i++ {
@@ -182,8 +181,9 @@ func TestPanicRecoveryKeepsCapturingScrollback(t *testing.T) {
 		t.Fatal("setup: expected some scrollback before forcing a panic")
 	}
 
-	if _, err := writeWithTimeout(t, term, []byte("\x1b[6n")); err == nil {
-		t.Fatal("expected the CPR query to panic the emulator")
+	forcePanicOnNextWrite(term)
+	if _, err := writeWithTimeout(t, term, []byte("boom")); err == nil {
+		t.Fatal("expected the forced panic to surface as an error")
 	}
 
 	for i := 0; i < 20; i++ {
