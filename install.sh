@@ -2,7 +2,7 @@
 # ngmux installer — downloads the latest prebuilt binary from GitHub Releases,
 # drops it in an install dir, and makes sure that dir is on your PATH.
 #
-#   curl -fsSL https://raw.githubusercontent.com/MauricioJC3/ng_mux/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.sh | sh
 #
 # Environment overrides:
 #   NGMUX_INSTALL_DIR   where to put the binary   (default: ~/.local/bin)
@@ -10,7 +10,7 @@
 #   NGMUX_NO_MODIFY_PATH set to 1 to skip editing your shell rc file
 set -eu
 
-REPO="MauricioJC3/ng_mux"
+REPO="NexuraGrid/ng_mux"
 BIN="ngmux"
 INSTALL_DIR="${NGMUX_INSTALL_DIR:-$HOME/.local/bin}"
 

@@ -16,7 +16,7 @@ import (
 )
 
 // updateRepo is the GitHub "owner/name" the update command pulls releases from.
-const updateRepo = "MauricioJC3/ng_mux"
+const updateRepo = "NexuraGrid/ng_mux"
 
 // versionString is the build version, falling back to the module version the Go
 // toolchain records in `go install`-ed binaries so those still report something
