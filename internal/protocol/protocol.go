@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // Type identifies the kind of a Message.
@@ -105,12 +106,18 @@ type Message struct {
 // cannot make the reader allocate without limit.
 const maxFrame = 8 << 20 // 8 MiB
 
-// Conn wraps a byte stream with message framing. It is not safe for
-// concurrent writes; callers that write from multiple goroutines must
-// serialize through a single writer goroutine.
+// Conn wraps a byte stream with message framing. Write is safe to call
+// concurrently from multiple goroutines: each call serializes header and
+// payload into one buffer under a lock and issues a single underlying
+// Write, so two callers can never interleave a header from one message
+// with the payload of another. Read is not safe for concurrent use — the
+// wire is a single ordered stream, so a Conn must have at most one reader
+// goroutine at a time.
 type Conn struct {
 	rwc io.ReadWriteCloser
-	hdr [4]byte
+
+	writeMu  sync.Mutex
+	writeBuf []byte // scratch buffer reused across Write calls, guarded by writeMu
 }
 
 // NewConn wraps rwc with message framing.
@@ -118,7 +125,8 @@ func NewConn(rwc io.ReadWriteCloser) *Conn {
 	return &Conn{rwc: rwc}
 }
 
-// Write encodes and sends a single message.
+// Write encodes and sends a single message. Safe for concurrent use; see
+// the Conn doc comment.
 func (c *Conn) Write(m Message) error {
 	payload, err := json.Marshal(m)
 	if err != nil {
@@ -127,15 +135,25 @@ func (c *Conn) Write(m Message) error {
 	if len(payload) > maxFrame {
 		return fmt.Errorf("protocol: message too large (%d bytes)", len(payload))
 	}
-	binary.BigEndian.PutUint32(c.hdr[:], uint32(len(payload)))
-	if _, err := c.rwc.Write(c.hdr[:]); err != nil {
-		return err
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	need := 4 + len(payload)
+	if cap(c.writeBuf) < need {
+		c.writeBuf = make([]byte, need)
 	}
-	_, err = c.rwc.Write(payload)
+	buf := c.writeBuf[:need]
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(payload)))
+	copy(buf[4:], payload)
+
+	_, err = c.rwc.Write(buf)
 	return err
 }
 
-// Read blocks for the next message.
+// Read blocks for the next message. Not safe for concurrent use: callers
+// that need to read from multiple goroutines must serialize through a
+// single reader.
 func (c *Conn) Read() (Message, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(c.rwc, hdr[:]); err != nil {
