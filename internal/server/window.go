@@ -25,10 +25,15 @@ type window struct {
 	shell     string
 	histLimit int
 	newPane   paneFactory
+
+	// logf reports unusual daemon-side conditions from panes owned by this
+	// window (a recovered emulator panic, a saved goroutine panic); see
+	// sessionOpts.logf. Propagated to every pane the window creates or adopts.
+	logf func(format string, args ...any)
 }
 
 // newWindow creates a window with a single pane sized to the given content area.
-func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell string, histLimit int, newPane paneFactory) (*window, error) {
+func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) (*window, error) {
 	if newPane == nil {
 		newPane = startPane
 	}
@@ -36,12 +41,23 @@ func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell 
 	if err != nil {
 		return nil, err
 	}
-	return wrapWindow(id, name, p, shell, histLimit, newPane), nil
+	// Safe to set directly: p was just created and its pump goroutine has not
+	// started yet (the caller starts it after newWindow returns), so there is
+	// no concurrent reader of p.logf. wrapWindow deliberately does not touch
+	// p.logf itself, because it is also used by break-pane to wrap a pane
+	// whose pump IS already running — mutating p.logf there would race with
+	// pump's read of it.
+	p.logf = logf
+	return wrapWindow(id, name, p, shell, histLimit, newPane, logf), nil
 }
 
 // wrapWindow builds a window around an already-running pane. break-pane uses it
 // to move a live pane into a window of its own without restarting its shell.
-func wrapWindow(id int, name string, p *pane, shell string, histLimit int, newPane paneFactory) *window {
+// It does not set p.logf: for a pane that already has a running pump goroutine
+// (break-pane's use case), doing so would race with pump's reads of it. logf
+// is server-wide and never actually changes across a pane's lifetime, so the
+// value the pane got at creation remains correct.
+func wrapWindow(id int, name string, p *pane, shell string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) *window {
 	w := &window{
 		id:        id,
 		name:      name,
@@ -51,6 +67,7 @@ func wrapWindow(id int, name string, p *pane, shell string, histLimit int, newPa
 		shell:     shell,
 		histLimit: histLimit,
 		newPane:   newPane,
+		logf:      logf,
 	}
 	p.win = w
 	return w
@@ -126,6 +143,7 @@ func (w *window) split(sess *session, dir layout.Orientation, cols, rows int) er
 		return err
 	}
 	p.win = w
+	p.logf = w.logf
 	w.zoom = 0 // a new pane is only useful visible; drop zoom like tmux does
 	w.tree = newTree
 	w.panes[newID] = p
@@ -222,7 +240,10 @@ func (w *window) detachPane(id layout.PaneID, cols, rows int) *pane {
 
 // adoptPane splices an existing, already-running pane in beside the active one,
 // splitting dir. It returns ErrNoRoom (via layout.Split) without changing
-// anything when the split will not fit.
+// anything when the split will not fit. It does not touch p.logf: the pane's
+// pump goroutine is already running (join-pane's use case), and mutating
+// p.logf here would race with pump's reads of it; logf is server-wide and
+// does not change across a pane's lifetime anyway.
 func (w *window) adoptPane(p *pane, dir layout.Orientation, cols, rows int) error {
 	newTree, err := layout.Split(w.tree, w.active, p.id, dir, w.outer(cols, rows))
 	if err != nil {

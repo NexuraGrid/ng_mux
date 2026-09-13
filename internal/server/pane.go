@@ -1,6 +1,8 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/MauricioJC3/ng_mux/internal/layout"
@@ -48,6 +50,13 @@ type pane struct {
 	pt   pty
 	vt   screen
 	copy *copyState
+
+	// logf reports unusual daemon-side conditions tied to this pane (a
+	// recovered emulator panic, a pump goroutine that itself panicked) so
+	// they are visible without crashing anything to surface them. Set by the
+	// window/session that owns the pane from Server.log.Printf; nil-safe, so
+	// tests that build a *pane by hand can leave it unset.
+	logf func(format string, args ...any)
 }
 
 // startPane opens a pty running shell (empty = platform default) and wires an
@@ -64,12 +73,26 @@ func startPane(id layout.PaneID, cols, rows int, shell string, histLimit int) (*
 
 // pump copies pty output into the emulator until the child exits or errors.
 // It calls onExit exactly once when the pane's process is finished.
+//
+// The emulator itself recovers from a panic and reports it as an error
+// wrapping vterm.ErrEmulatorPanic (see vterm.Term.Write), so the ordinary case
+// here is just logging that and continuing to pump: one pane's malformed
+// escape sequence must never stop its shell from being usable, let alone take
+// the daemon down. The deferred recoverAndLog is a last resort for anything
+// pump does outside that guarded call (reading the pty, invoking onExit) —
+// it should never fire in practice, but if it does, this goroutine dying
+// quietly is far better than the whole process dying loudly.
 func (p *pane) pump(onExit func(*pane)) {
+	defer recoverAndLog(p.logf, fmt.Sprintf("pane %d pump", p.id))
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := p.pt.Read(buf)
 		if n > 0 {
-			_, _ = p.vt.Write(buf[:n])
+			if _, werr := p.vt.Write(buf[:n]); werr != nil && errors.Is(werr, vterm.ErrEmulatorPanic) {
+				if p.logf != nil {
+					p.logf("pane %d: %v", p.id, werr)
+				}
+			}
 		}
 		if err != nil {
 			break

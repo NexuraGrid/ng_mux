@@ -50,8 +50,32 @@ func (c *csiEscape) parse() {
 			//t.logf("invalid CSI arg '%s'\n", p)
 			break
 		}
-		c.args = append(c.args, i)
+		// A hostile or malformed sequence (e.g. "\x1b[-5@") can carry a
+		// negative or absurdly large parameter. strconv.Atoi happily parses
+		// both, but nothing downstream expects it: handlers use these values
+		// as slice indices and loop bounds (insertBlanks, deleteChars, CHT,
+		// CBT, ...) and a negative or huge value there is undefined behavior
+		// at best and an out-of-range panic at worst. Clamp at the source so
+		// no negative value ever reaches a handler; handlers additionally
+		// clamp their own inputs as defense in depth.
+		c.args = append(c.args, clampArg(i))
 	}
+}
+
+// maxCSIArg bounds a single CSI parameter. 65535 comfortably covers every
+// legitimate use (repeat counts, cursor moves, mode numbers) while keeping a
+// clamped value far too small to threaten any loop bound or slice index
+// derived from it, even before a handler applies its own bound.
+const maxCSIArg = 65535
+
+func clampArg(i int) int {
+	if i < 0 {
+		return 0
+	}
+	if i > maxCSIArg {
+		return maxCSIArg
+	}
+	return i
 }
 
 func (c *csiEscape) arg(i, def int) int {
@@ -107,7 +131,7 @@ func (t *State) handleCSI() {
 	case 'H', 'f': // CUP, HVP - move to <row> <col>
 		t.moveAbsTo(c.arg(1, 1)-1, c.arg(0, 1)-1)
 	case 'I': // CHT - cursor forward tabulation <n> tab stops
-		n := c.arg(0, 1)
+		n := boundedRepeat(c.arg(0, 1), t.cols)
 		for i := 0; i < n; i++ {
 			t.putTab(true)
 		}
@@ -149,11 +173,15 @@ func (t *State) handleCSI() {
 	case 'M': // DL - delete <n> lines
 		t.deleteLines(c.arg(0, 1))
 	case 'X': // ECH - erase <n> chars
-		t.clear(t.cur.X, t.cur.Y, t.cur.X+c.arg(0, 1)-1, t.cur.Y)
+		n := c.arg(0, 1)
+		if n < 1 {
+			n = 1
+		}
+		t.clear(t.cur.X, t.cur.Y, t.cur.X+n-1, t.cur.Y)
 	case 'P': // DCH - delete <n> chars
 		t.deleteChars(c.arg(0, 1))
 	case 'Z': // CBT - cursor backward tabulation <n> tab stops
-		n := c.arg(0, 1)
+		n := boundedRepeat(c.arg(0, 1), t.cols)
 		for i := 0; i < n; i++ {
 			t.putTab(false)
 		}
@@ -186,4 +214,15 @@ func (t *State) handleCSI() {
 unknown: // TODO: get rid of this goto
 	t.logf("unknown CSI sequence '%c'\n", c.mode)
 	// TODO: c.dump()
+}
+
+// boundedRepeat caps a CSI repeat-count parameter at cols, so a huge parameter
+// (post-clampArg, up to 65535) cannot spin a tab-stop loop far longer than the
+// line it operates on could ever need. n == 0 is left as-is (no repeat), the
+// existing behavior for an explicit zero count.
+func boundedRepeat(n, cols int) int {
+	if cols > 0 && n > cols {
+		n = cols
+	}
+	return n
 }

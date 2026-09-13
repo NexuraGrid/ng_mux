@@ -203,6 +203,14 @@ rather ngmux never touch the clipboard.
 
 Unknown lines are logged and skipped, never fatal.
 
+### Troubleshooting
+
+The daemon always logs to `<user cache dir>/ngmux/ngmuxd-<session>.log`
+(`~/.cache/ngmux/` on Linux, `~/Library/Caches/ngmux/` on macOS,
+`%LocalAppData%\ngmux\` on Windows) — the file is rotated (truncated) once it
+passes 5 MiB. Set `NGMUX_DEBUG=1` before starting the daemon to also mirror
+that output to stderr.
+
 ## Architecture
 
 ```
