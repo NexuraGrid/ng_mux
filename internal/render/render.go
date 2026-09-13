@@ -354,7 +354,8 @@ func drawStatusSegments(f *Frame, segs []StatusSegment, style StatusStyle) {
 
 // Paint returns the ANSI byte stream that turns a terminal currently showing
 // prev into one showing next. If prev is nil or differently sized, it does a
-// full repaint.
+// full repaint. If nothing visible differs (cells, cursor position and
+// visibility), it returns nil so an unchanged frame costs no bytes.
 func Paint(prev, next *Frame) []byte {
 	var b bytes.Buffer
 	full := prev == nil || prev.Cols != next.Cols || prev.Rows != next.Rows
@@ -371,6 +372,7 @@ func Paint(prev, next *Frame) []byte {
 		lastFG     = uint32(0xDEADBEEF)
 		lastBG     = uint32(0xDEADBEEF)
 		lastAttr   = uint16(0xFFFF)
+		changed    bool
 	)
 	for y := 0; y < next.Rows; y++ {
 		for x := 0; x < next.Cols; x++ {
@@ -402,11 +404,17 @@ func Paint(prev, next *Frame) []byte {
 			var tmp [4]byte
 			n := utf8.EncodeRune(tmp[:], ch)
 			b.Write(tmp[:n])
+			changed = true
 			curX = x + 1
 			if nc.Width == 2 {
 				curX = x + 2 // the terminal advanced two columns
 			}
 		}
+	}
+
+	if prev != nil && !changed && prev.CurVisible == next.CurVisible &&
+		(!next.CurVisible || (prev.CurX == next.CurX && prev.CurY == next.CurY)) {
+		return nil
 	}
 
 	b.WriteString("\x1b[0m")

@@ -216,14 +216,19 @@ func TestDetachFlushesByeBeforeClosing(t *testing.T) {
 // client skipped while busy is repainted on a later tick even though its
 // session has produced nothing new since.
 func TestTickRepaintsStaleClientWhenSessionIdle(t *testing.T) {
-	srv, ff, sess := setupSession(t)
+	srv, _, sess := setupSession(t)
 	c, peer := pipeClient(t, sess.name)
 	srv.addClient(c)
 
 	srv.tick()
 	waitFor(t, c.writerHolding, time.Second)
 
-	_, _ = ff.byID(1).scr.Write([]byte("x"))
+	// A visible change (the window name in the status bar) that does not reset
+	// the client, so the next tick must take the stale path.
+	sess.mu.Lock()
+	sess.windows[sess.cur].name = "renamed"
+	sess.needsRepaint = true
+	sess.mu.Unlock()
 	srv.tick()
 	if sess.dirty() {
 		t.Fatal("setup: the session should be clean after the second tick")

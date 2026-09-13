@@ -438,11 +438,21 @@ func (s *session) dirty() bool {
 	if time.Now().Before(s.displayPanesUntil) || s.panesShown {
 		return true
 	}
-	for _, w := range s.windows {
-		for _, p := range w.panes {
-			if p.vt.Dirty() {
-				return true
-			}
+	// Only what is drawn can change the next frame: the current window, or just
+	// its zoomed pane. frame() clears the flag only on the panes it snapshots,
+	// so counting hidden panes kept a session with a busy (or merely fresh)
+	// background window dirty forever, recomposing every tick. Showing a hidden
+	// pane (select-window, unzoom, a status click) marks the session itself.
+	w := s.current()
+	if w == nil {
+		return false
+	}
+	if zp := w.zoomedPane(); zp != nil {
+		return zp.vt.Dirty()
+	}
+	for _, p := range w.panes {
+		if p.vt.Dirty() {
+			return true
 		}
 	}
 	return false
