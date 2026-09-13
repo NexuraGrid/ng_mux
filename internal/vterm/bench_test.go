@@ -11,12 +11,10 @@ import (
 // scrolled line reuses the ring's backing array instead of allocating one per
 // line.
 //
-// It measures the *delta* between capture enabled (warmed up so the ring is
-// full and every push overwrites) and capture disabled, rather than an
-// absolute allocs/op count: vt10x's Write has its own pre-existing per-rune
-// overhead (parse() unconditionally formats a debug string even when no
-// DebugLogger is attached) that is unrelated to scrollback and out of scope
-// here. The delta isolates what this change is responsible for.
+// It checks both the delta against capture disabled (what scrollback itself
+// costs) and an absolute ceiling for a whole Write: a plain log line must not
+// allocate per rune (the emulator's debug trace used to box every rune into a
+// string even with no logger attached).
 func TestScrollbackCaptureAddsNoAllocationsAfterWarmup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocation microbenchmark; skipped in -short")
@@ -57,6 +55,11 @@ func TestScrollbackCaptureAddsNoAllocationsAfterWarmup(t *testing.T) {
 	if delta > tolerance {
 		t.Fatalf("scrollback capture added %.3f allocs/op on top of the %.3f baseline (want delta <= %.3f): steady-state capture should reuse the ring's backing arrays",
 			delta, baseAllocs, tolerance)
+	}
+	const maxWriteAllocs = 2
+	if capturedAllocs > maxWriteAllocs {
+		t.Fatalf("a scrolling log-line Write allocated %.1f times (want <= %d): something allocates per rune",
+			capturedAllocs, maxWriteAllocs)
 	}
 }
 
