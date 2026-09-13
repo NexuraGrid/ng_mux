@@ -4,11 +4,13 @@
 // cells plus the cursor. The rest of ngmux never touches vt10x directly, so the
 // emulator can be swapped later without churn.
 //
-// vt10x itself keeps no scrollback, so this package reconstructs one: before
-// each write it snapshots the grid, and after the write it detects a vertical
-// scroll (the old rows [k:] now equal the new rows [:-k]) and pushes the k rows
-// that fell off the top into a capped history ring. Capture is suppressed while
+// vt10x itself keeps no scrollback, so this package reconstructs one, but it
+// does so natively: vt10x calls back (vt10x.WithScrollback) with each line as
+// it scrolls off the top of the main screen, and Write does no work beyond
+// that hook to detect scrolling. Capture is suppressed by vt10x itself while
 // the child is on the alternate screen (vim, less, htop), matching tmux.
+// History is a fixed-capacity ring buffer that reuses its backing arrays once
+// full, so steady-state log output allocates nothing per scrolled line.
 package vterm
 
 import (
@@ -34,10 +36,12 @@ import (
 var ErrEmulatorPanic = errors.New("vterm: recovered panic in terminal emulator")
 
 // newEmulator builds a vt10x terminal of the given size, wired to reply for
-// device-query responses (DA, DSR, ...). It is the single constructor used by
-// both New and Write's panic-recovery path, so the two can never drift.
-func newEmulator(cols, rows int, reply io.Writer) vt10x.Terminal {
-	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows)}
+// device-query responses (DA, DSR, ...) and to feed onScrollOut every line
+// that scrolls off the top of the main screen. It is the single constructor
+// used by both New and Write's panic-recovery path, so a freshly recovered
+// emulator never loses its scrollback capture wiring.
+func newEmulator(cols, rows int, reply io.Writer, onScrollOut func(ln []vt10x.Glyph)) vt10x.Terminal {
+	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows), vt10x.WithScrollback(onScrollOut)}
 	if reply != nil {
 		opts = append(opts, vt10x.WithWriter(reply))
 	}
@@ -111,8 +115,23 @@ type Term struct {
 
 	reply io.Writer // pty master: where query responses (DA, DSR) are written
 
-	histLimit int
-	history   [][]Cell // oldest first; each row is exactly cols wide at push time
+	// histBuf is a ring buffer holding the scrollback: oldest line at
+	// histHead, histLen of its len(histBuf) (== histCap) slots in use. Each
+	// row is exactly cols wide at push time. histCap<=0 disables capture
+	// (pushHistory becomes a no-op). Overwriting the oldest slot in place,
+	// rather than reallocating, is what makes steady-state scrolling
+	// allocation-free.
+	histCap  int
+	histBuf  [][]Cell
+	histHead int
+	histLen  int
+
+	// scrolledTotal counts every line ever pushed into history (not just the
+	// ones currently retained). Copy-mode uses it to keep its view anchored
+	// while more output arrives and lines it is looking at age out the
+	// bottom. It only advances when a line is actually pushed, so it stays at
+	// zero while capture is disabled.
+	scrolledTotal uint64
 
 	// dirty is set whenever bytes arrive or the grid is resized, and cleared by
 	// Snapshot. The server's broadcaster reads it to skip repainting sessions
@@ -132,7 +151,10 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if rows <= 0 {
 		rows = 24
 	}
-	return &Term{t: newEmulator(cols, rows, reply), reply: reply, cols: cols, rows: rows, histLimit: 2000, dirty: true}
+	t := &Term{reply: reply, cols: cols, rows: rows, histCap: 2000, dirty: true}
+	t.histBuf = make([][]Cell, t.histCap)
+	t.t = newEmulator(cols, rows, reply, t.pushHistory)
+	return t
 }
 
 // Device-attribute query/response pairs. vt10x answers DSR (cursor position,
@@ -161,25 +183,37 @@ func (t *Term) answerDeviceQueries(p []byte) {
 }
 
 // SetHistoryLimit caps the scrollback ring (lines). Zero disables capture.
+// Shrinking or growing preserves the newest min(n, HistoryLen()) lines, in
+// order.
 func (t *Term) SetHistoryLimit(n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if n < 0 {
 		n = 0
 	}
-	t.histLimit = n
-	if len(t.history) > n {
-		t.history = append(t.history[:0:0], t.history[len(t.history)-n:]...)
+	if n == t.histCap {
+		return
 	}
+	oldBuf, oldHead, oldLen := t.histBuf, t.histHead, t.histLen
+	keep := oldLen
+	if keep > n {
+		keep = n
+	}
+	newBuf := make([][]Cell, n)
+	for i := 0; i < keep; i++ {
+		// oldest-first logical index of the newest `keep` rows
+		logical := oldLen - keep + i
+		newBuf[i] = oldBuf[(oldHead+logical)%len(oldBuf)]
+	}
+	t.histBuf = newBuf
+	t.histHead = 0
+	t.histLen = keep
+	t.histCap = n
 }
 
-// Write feeds pty output into the emulator and updates scrollback.
-//
-// To reconstruct scrollback, the payload is fed in newline-delimited slices so
-// a scroll can be detected by diffing the grid around the write. That diff is
-// only taken when a scroll is actually possible: the cursor is on (or near) the
-// last row, or the slice is long enough to wrap into one. Steady output that
-// does not touch the bottom of the screen costs nothing extra.
+// Write feeds pty output into the emulator. Scrollback capture happens inside
+// vt10x itself (see newEmulator's onScrollOut hook), so Write does no more
+// work than parsing the payload once.
 func (t *Term) Write(p []byte) (n int, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -193,7 +227,7 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	// goroutine.
 	defer func() {
 		if r := recover(); r != nil {
-			t.t = newEmulator(t.cols, t.rows, t.reply)
+			t.t = newEmulator(t.cols, t.rows, t.reply, t.pushHistory)
 			t.dirty = true
 			err = fmt.Errorf("%w: %v\n%s", ErrEmulatorPanic, r, debug.Stack())
 		}
@@ -204,54 +238,7 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	}
 	t.answerDeviceQueries(p)
 
-	if t.histLimit <= 0 || t.altLocked() {
-		return t.t.Write(p)
-	}
-
-	total := 0
-	for len(p) > 0 {
-		chunk := p
-		if i := indexByte(p, '\n'); i >= 0 {
-			chunk = p[:i+1]
-		}
-		p = p[len(chunk):]
-
-		mayScroll := t.cursorYLocked() >= t.rows-1 || len(chunk) > t.cols
-		if !mayScroll {
-			n, err := t.t.Write(chunk)
-			total += n
-			if err != nil {
-				return total, err
-			}
-			continue
-		}
-		before := t.gridLocked()
-		n, err := t.t.Write(chunk)
-		total += n
-		if !t.altLocked() {
-			t.captureScrollLocked(before)
-		}
-		if err != nil {
-			return total, err
-		}
-	}
-	return total, nil
-}
-
-// cursorYLocked returns the emulator cursor's row. Caller holds t.mu.
-func (t *Term) cursorYLocked() int {
-	t.t.Lock()
-	defer t.t.Unlock()
-	return t.t.Cursor().Y
-}
-
-func indexByte(b []byte, c byte) int {
-	for i := range b {
-		if b[i] == c {
-			return i
-		}
-	}
-	return -1
+	return t.t.Write(p)
 }
 
 // Resize changes the emulator grid size. History is kept as-is; ScrollbackView
@@ -286,7 +273,17 @@ func (t *Term) Size() (cols, rows int) {
 func (t *Term) HistoryLen() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.history)
+	return t.histLen
+}
+
+// ScrolledTotal is the number of lines ever pushed into history, including
+// ones since evicted by the ring's capacity. It only advances when a line is
+// actually pushed (never while capture is disabled). Copy-mode uses it to
+// anchor its view by count rather than by index while output keeps arriving.
+func (t *Term) ScrolledTotal() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.scrolledTotal
 }
 
 // Snapshot copies the whole live screen out.
@@ -330,6 +327,10 @@ func (t *Term) SnapshotInto(dst *Snapshot) {
 // ScrollbackView returns a viewRows-tall window over history+live, starting
 // offset lines above the bottom. offset 0 is the live screen; offset ==
 // HistoryLen() is scrolled as far back as possible. The cursor is not shown.
+//
+// It reads live rows directly from the emulator (one t.t.Lock for the whole
+// call) instead of snapshotting the entire grid first, so only the result
+// itself is allocated.
 func (t *Term) ScrollbackView(offset, viewRows int) Snapshot {
 	if viewRows <= 0 {
 		viewRows = 1
@@ -337,9 +338,8 @@ func (t *Term) ScrollbackView(offset, viewRows int) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	live := t.gridLocked()
-	histLen := len(t.history)
-	total := histLen + len(live)
+	histLen := t.histLen
+	total := histLen + t.rows
 
 	if offset < 0 {
 		offset = 0
@@ -352,6 +352,9 @@ func (t *Term) ScrollbackView(offset, viewRows int) Snapshot {
 
 	cols := t.cols
 	snap := Snapshot{Cols: cols, Rows: viewRows, Cells: make([]Cell, cols*viewRows)}
+
+	t.t.Lock()
+	defer t.t.Unlock()
 	for r := 0; r < viewRows; r++ {
 		for x := 0; x < cols; x++ {
 			snap.Cells[r*cols+x] = blankCell()
@@ -360,113 +363,59 @@ func (t *Term) ScrollbackView(offset, viewRows int) Snapshot {
 		if src < 0 || src >= total {
 			continue
 		}
-		var row []Cell
 		if src < histLen {
-			row = t.history[src]
-		} else {
-			row = live[src-histLen]
+			row := t.historyRow(src)
+			for x := 0; x < cols && x < len(row); x++ {
+				snap.Cells[r*cols+x] = row[x]
+			}
+			continue
 		}
-		for x := 0; x < cols && x < len(row); x++ {
-			snap.Cells[r*cols+x] = row[x]
+		y := src - histLen
+		for x := 0; x < cols; x++ {
+			snap.Cells[r*cols+x] = toCell(t.t.Cell(x, y))
 		}
 	}
 	return snap
 }
 
-// altLocked reports whether the child is on the alternate screen. Caller holds mu.
-func (t *Term) altLocked() bool {
-	return t.t.Mode()&vt10x.ModeAltScreen != 0
+// historyRow returns the oldest-first logical row i (0 <= i < t.histLen).
+// Caller holds t.mu.
+func (t *Term) historyRow(i int) []Cell {
+	return t.histBuf[(t.histHead+i)%len(t.histBuf)]
 }
 
-// gridLocked copies every live row as []Cell. Caller holds mu.
-func (t *Term) gridLocked() [][]Cell {
-	t.t.Lock()
-	defer t.t.Unlock()
-	rows := make([][]Cell, t.rows)
-	for y := 0; y < t.rows; y++ {
-		row := make([]Cell, t.cols)
-		for x := 0; x < t.cols; x++ {
-			row[x] = toCell(t.t.Cell(x, y))
-		}
-		rows[y] = row
-	}
-	return rows
-}
-
-// captureScrollLocked compares the pre-write grid to the post-write grid and,
-// if the screen scrolled up by k rows, pushes the k evicted top rows into
-// history. Caller holds mu.
-func (t *Term) captureScrollLocked(before [][]Cell) {
-	rows := len(before)
-	if rows == 0 || rowBlank(before[0]) {
-		return // nothing meaningful fell off the top
-	}
-	after := t.gridLocked()
-	if len(after) != rows {
-		return // a resize raced the write; skip this capture
-	}
-	k := scrollAmount(before, after)
-	for i := 0; i < k; i++ {
-		t.pushHistoryLocked(before[i])
-	}
-}
-
-// scrollAmount returns k>0 when the screen scrolled up by k rows between before
-// and after: rows [k:] of before now appear at [:rows-k] of after. The last
-// overlapping row is excluded from the check because that is where the write
-// that caused the scroll places its new content. It returns the largest such k.
-func scrollAmount(before, after [][]Cell) int {
-	rows := len(before)
-	best := 0
-	for k := 1; k < rows; k++ {
-		cmp := rows - k - 1
-		if cmp < 1 {
-			cmp = rows - k
-		}
-		match := true
-		for i := 0; i < cmp; i++ {
-			if !rowEqual(before[k+i], after[i]) {
-				match = false
-				break
-			}
-		}
-		if match {
-			best = k
-		}
-	}
-	return best
-}
-
-func (t *Term) pushHistoryLocked(row []Cell) {
-	if t.histLimit <= 0 {
+// pushHistory converts one scrolled-off vt10x line into a Cell row and pushes
+// it into the ring, reusing the evicted slot's backing array when the row
+// width is unchanged (the steady-state case: fixed pane size, allocation
+// free). It is vt10x's onScrollOut hook, so vt10x's own concurrency rules
+// apply: it runs synchronously from inside t.t.Write or t.t.Resize, both of
+// which vterm only ever calls while already holding t.mu, and the slice it
+// receives is invalid once this function returns.
+func (t *Term) pushHistory(g []vt10x.Glyph) {
+	if t.histCap <= 0 {
 		return
 	}
-	cp := append([]Cell(nil), row...)
-	t.history = append(t.history, cp)
-	if len(t.history) > t.histLimit {
-		t.history = t.history[len(t.history)-t.histLimit:]
-	}
-}
+	t.scrolledTotal++
 
-func rowEqual(a, b []Cell) bool {
-	if len(a) != len(b) {
-		return false
+	var slot int
+	if t.histLen < len(t.histBuf) {
+		slot = (t.histHead + t.histLen) % len(t.histBuf)
+		t.histLen++
+	} else {
+		slot = t.histHead
+		t.histHead = (t.histHead + 1) % len(t.histBuf)
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
 
-func rowBlank(row []Cell) bool {
-	for _, c := range row {
-		if c.Ch != ' ' && c.Ch != 0 {
-			return false
-		}
+	row := t.histBuf[slot]
+	if cap(row) < len(g) {
+		row = make([]Cell, len(g))
+	} else {
+		row = row[:len(g)]
 	}
-	return true
+	for i, gl := range g {
+		row[i] = toCell(gl)
+	}
+	t.histBuf[slot] = row
 }
 
 func toCell(g vt10x.Glyph) Cell {
