@@ -20,6 +20,8 @@ import (
 	"io"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/MauricioJC3/ng_mux/internal/vt10x"
 )
@@ -133,11 +135,23 @@ type Term struct {
 	// zero while capture is disabled.
 	scrolledTotal uint64
 
-	// dirty is set whenever bytes arrive or the grid is resized, and cleared by
-	// Snapshot. The server's broadcaster reads it to skip repainting sessions
-	// whose panes have produced nothing since the last frame. A fresh Term is
-	// dirty so its first frame is always drawn.
-	dirty bool
+	// pending buffers the trailing bytes of a multi-byte UTF-8 rune left
+	// incomplete at the end of a Write call, so they can be prepended to the
+	// next one instead of being fed to vt10x half-formed. Without this, a rune
+	// split across a pty read (or a pump chunk boundary) would reach vt10x's
+	// own Write as an unterminated encoding: vt10x has no cross-call buffer of
+	// its own, so it either logs each stray byte as "invalid utf8 sequence" or
+	// silently drops the last one, corrupting the character either way. At
+	// most 3 bytes: the longest incomplete prefix of a 4-byte encoding.
+	// Caller holds mu.
+	pending []byte
+
+	// dirty is set whenever bytes arrive or the grid is resized, and read by
+	// Dirty() without taking mu: the server's broadcaster polls every pane's
+	// Dirty() while holding its own session lock, and a pane mid-Write must
+	// never make that block (see Write/Dirty). Snapshot clears it. A fresh
+	// Term is dirty so its first frame is always drawn.
+	dirty atomic.Bool
 }
 
 // New creates an emulator of the given size. reply receives the bytes the
@@ -151,7 +165,8 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if rows <= 0 {
 		rows = 24
 	}
-	t := &Term{reply: reply, cols: cols, rows: rows, histCap: 2000, dirty: true}
+	t := &Term{reply: reply, cols: cols, rows: rows, histCap: 2000}
+	t.dirty.Store(true)
 	t.histBuf = make([][]Cell, t.histCap)
 	t.t = newEmulator(cols, rows, reply, t.pushHistory)
 	return t
@@ -212,8 +227,10 @@ func (t *Term) SetHistoryLimit(n int) {
 }
 
 // Write feeds pty output into the emulator. Scrollback capture happens inside
-// vt10x itself (see newEmulator's onScrollOut hook), so Write does no more
-// work than parsing the payload once.
+// vt10x itself (see newEmulator's onScrollOut hook), so Write does little more
+// work than parsing the payload once, plus holding back a trailing incomplete
+// UTF-8 rune (see the pending field) so a caller is free to split one logical
+// burst across several Write calls at arbitrary byte boundaries.
 func (t *Term) Write(p []byte) (n int, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -228,17 +245,70 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.t = newEmulator(t.cols, t.rows, t.reply, t.pushHistory)
-			t.dirty = true
+			t.dirty.Store(true)
+			t.pending = t.pending[:0]
 			err = fmt.Errorf("%w: %v\n%s", ErrEmulatorPanic, r, debug.Stack())
 		}
 	}()
 
-	if len(p) > 0 {
-		t.dirty = true
+	if len(p) == 0 {
+		return 0, nil
 	}
+	t.dirty.Store(true)
 	t.answerDeviceQueries(p)
 
-	return t.t.Write(p)
+	buf := p
+	if len(t.pending) > 0 {
+		buf = append(append(make([]byte, 0, len(t.pending)+len(p)), t.pending...), p...)
+	}
+
+	feed := buf
+	if tail := incompleteRuneTail(buf); tail > 0 {
+		feed = buf[:len(buf)-tail]
+	}
+
+	if len(feed) > 0 {
+		if _, werr := t.t.Write(feed); werr != nil {
+			return len(p), werr
+		}
+	}
+
+	if held := buf[len(feed):]; len(held) > 0 {
+		t.pending = append(t.pending[:0], held...)
+	} else {
+		t.pending = t.pending[:0]
+	}
+
+	return len(p), nil
+}
+
+// incompleteRuneTail reports how many trailing bytes of p form a UTF-8
+// encoding left incomplete at the end of the slice (0 if p ends on a
+// complete rune, or on genuinely invalid bytes that vt10x should just log and
+// discard as it always has). It scans back at most 3 bytes — the longest
+// incomplete prefix of a 4-byte encoding — for the start of the last rune,
+// then checks whether the bytes from there to the end already form a full
+// encoding. utf8.FullRune treats an invalid encoding as "full" (it converts
+// to a width-1 error rune on its own), so genuinely malformed bytes are never
+// held back indefinitely — only a valid prefix that is still waiting on more
+// continuation bytes is.
+func incompleteRuneTail(p []byte) int {
+	n := len(p)
+	limit := 3
+	if n < limit {
+		limit = n
+	}
+	for i := 1; i <= limit; i++ {
+		b := p[n-i]
+		if !utf8.RuneStart(b) {
+			continue
+		}
+		if utf8.FullRune(p[n-i:]) {
+			return 0
+		}
+		return i
+	}
+	return 0
 }
 
 // Resize changes the emulator grid size. History is kept as-is; ScrollbackView
@@ -251,15 +321,20 @@ func (t *Term) Resize(cols, rows int) {
 	defer t.mu.Unlock()
 	t.t.Resize(cols, rows)
 	t.cols, t.rows = cols, rows
-	t.dirty = true
+	t.dirty.Store(true)
 }
 
 // Dirty reports whether bytes have arrived or the grid was resized since the
 // last Snapshot. A fresh Term is dirty.
+//
+// It reads the flag without taking mu, unlike every other method here, so a
+// pane mid-Write (which can hold mu for a while feeding a large burst into
+// the emulator) never makes Dirty wait: the server's broadcaster calls it for
+// every pane, under its own session lock, to decide whether to repaint —
+// blocking there would stall every other pane's keystrokes and every other
+// session's frames behind one busy pane.
 func (t *Term) Dirty() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.dirty
+	return t.dirty.Load()
 }
 
 // Size reports the current grid size.
@@ -301,7 +376,14 @@ func (t *Term) SnapshotInto(dst *Snapshot) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.dirty = false
+	// Cleared first thing inside the locked section, before the copy below,
+	// not after: Write and Resize both also take mu, so neither can run
+	// concurrently with this method's body and no bytes are ever missed
+	// either way. Clearing early is the more conservative order — if a future
+	// dirty-setting path ever stopped taking mu, clearing late could still
+	// discard a mark for bytes this copy never saw, where clearing early can
+	// only ever cost one extra (harmless) repaint.
+	t.dirty.Store(false)
 
 	t.t.Lock()
 	defer t.t.Unlock()
