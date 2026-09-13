@@ -172,3 +172,60 @@ func FuzzWrite(f *testing.F) {
 		}
 	})
 }
+
+// FuzzWriteResize interleaves Resize calls with Write, decoding two bytes at
+// a time from the fuzz input as (cols, rows) bounded to [1, 300]. This
+// exercises every resize-adjacent path (tab stop extension/truncation,
+// scroll-region reset, saved-cursor restore, alt-screen slide) against
+// arbitrary grow/shrink sequences that FuzzWrite alone can never reach, since
+// its input only ever reaches State.Write, never State.resize. The panic
+// this caught before the fix: growing past the original width and then
+// tabbing landed the cursor past the new right margin, because resize()
+// wrote extended tab stops into the discarded old tabs slice.
+func FuzzWriteResize(f *testing.F) {
+	seeds := [][]byte{
+		// 40x24 -> 100x24, then tab repeatedly: the tab-stop-after-widen
+		// reproducer.
+		{40, 24, 100, 24, '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t', '\t'},
+		// shrink then grow: tab stops beyond the shrunk width must not
+		// resurface stale, and extension must resume from the surviving stop.
+		{80, 24, 20, 24, 50, 24, '\t', '\t', '\t', '\t', '\t', '\t', '\t'},
+		// resize while a scroll region and saved cursor are active.
+		{80, 24, '\x1b', '[', '8', ';', '2', '0', 'r', '\x1b', '7', 10, 24, '\x1b', '8'},
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		term := New(WithSize(80, 24))
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("panic on %v: %v", data, r)
+			}
+		}()
+
+		i := 0
+		for i+2 <= len(data) {
+			cols := int(data[i])%300 + 1
+			rows := int(data[i+1])%300 + 1
+			i += 2
+			term.Resize(cols, rows)
+
+			end := i + 16
+			if end > len(data) {
+				end = len(data)
+			}
+			_, _ = term.Write(data[i:end])
+			i = end
+
+			cur := term.Cursor()
+			gotCols, gotRows := term.Size()
+			if gotCols != cols || gotRows != rows {
+				t.Fatalf("Size() = %dx%d after Resize(%d, %d)", gotCols, gotRows, cols, rows)
+			}
+			if cur.X < 0 || cur.X >= gotCols || cur.Y < 0 || cur.Y >= gotRows {
+				t.Fatalf("cursor out of bounds after resize %dx%d: (%d,%d)", cols, rows, cur.X, cur.Y)
+			}
+		}
+	})
+}
