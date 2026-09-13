@@ -369,12 +369,18 @@ func (t *State) resize(cols, rows int) bool {
 	}
 	copy(t.tabs, tabs)
 	if cols > t.cols {
+		// Extend default tab stops into the new columns, continuing from the
+		// last stop that already existed. t.tabs (not the old tabs slice,
+		// which is only cols long) is both the search space and the write
+		// target, and the loop bound is the new width: writing to the old
+		// slice or bounding by its old length silently dropped every stop
+		// beyond the previous width.
 		i := t.cols - 1
-		for i > 0 && !tabs[i] {
+		for i > 0 && !t.tabs[i] {
 			i--
 		}
-		for i += tabspaces; i < len(tabs); i += tabspaces {
-			tabs[i] = true
+		for i += tabspaces; i < cols; i += tabspaces {
+			t.tabs[i] = true
 		}
 	}
 
