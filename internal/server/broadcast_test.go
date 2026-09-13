@@ -61,9 +61,11 @@ func (s *blockingScreen) ScrollbackView(offset, rows int) vterm.Snapshot {
 	return vterm.Snapshot{Cols: s.cols, Rows: rows, Cells: make([]vterm.Cell, s.cols*rows)}
 }
 
-func (s *blockingScreen) HistoryLen() int       { return 0 }
-func (s *blockingScreen) SetHistoryLimit(n int) {}
-func (s *blockingScreen) Dirty() bool           { return s.dirty.Load() }
+func (s *blockingScreen) HistoryLen() int              { return 0 }
+func (s *blockingScreen) SetHistoryLimit(n int)        {}
+func (s *blockingScreen) Dirty() bool                  { return s.dirty.Load() }
+func (s *blockingScreen) ScrolledTotal() uint64        { return 0 }
+func (s *blockingScreen) InputModes() vterm.InputModes { return vterm.InputModes{} }
 
 func TestSessionDirtyLifecycle(t *testing.T) {
 	_, ff, sess := setupSession(t)

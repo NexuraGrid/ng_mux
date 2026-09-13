@@ -177,6 +177,38 @@ func (w *window) enterCopy(cols, rows int) {
 		r = w.outer(cols, rows) // the zoomed pane owns the whole content area
 	}
 	p.copy = newCopyState(max1(r.W), max1(r.H))
+	p.copy.seen = p.vt.ScrolledTotal()
+}
+
+// hitPane returns the id of the pane occupying (x,y), accounting for zoom: a
+// zoomed pane covers the whole content area regardless of the tiled layout
+// underneath it. It returns 0 if the point is not over any pane (e.g. a
+// divider between two tiled panes; impossible while zoomed).
+func (w *window) hitPane(rects map[layout.PaneID]layout.Rect, x, y int) layout.PaneID {
+	if zp := w.zoomedPane(); zp != nil {
+		return zp.id
+	}
+	return paneAt(rects, x, y)
+}
+
+// rectOf returns the rectangle pane id is actually displayed at, accounting
+// for zoom the same way hitPane does.
+func (w *window) rectOf(rects map[layout.PaneID]layout.Rect, cols, rows int, id layout.PaneID) layout.Rect {
+	if zp := w.zoomedPane(); zp != nil && zp.id == id {
+		return w.outer(cols, rows)
+	}
+	return rects[id]
+}
+
+// paneAndRect resolves the pane under (x,y) and its displayed rectangle,
+// falling back to the active pane when the point is not over any pane (a
+// wheel event always lands on some pane, tmux-style, even from a divider row).
+func (w *window) paneAndRect(rects map[layout.PaneID]layout.Rect, cols, rows, x, y int) (*pane, layout.Rect) {
+	id := w.hitPane(rects, x, y)
+	if id == 0 {
+		id = w.active
+	}
+	return w.panes[id], w.rectOf(rects, cols, rows, id)
 }
 
 // removePane drops a pane, collapses the tree, moves focus to its sibling, and
@@ -293,6 +325,7 @@ func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, s
 			pv.Badge = fmt.Sprintf(" %d ", numOf[w.zoom])
 		}
 		if zp.copy != nil {
+			zp.syncCopy()
 			*sn = zp.vt.ScrollbackView(zp.copy.offset, max1(full.H))
 			pv.Sel = zp.copy.selection()
 			pv.CopyCur = zp.copy.cursor()
@@ -325,6 +358,7 @@ func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, s
 			pv.Badge = fmt.Sprintf(" %d ", numOf[id])
 		}
 		if p.copy != nil {
+			p.syncCopy()
 			*sn = p.vt.ScrollbackView(p.copy.offset, max1(rects[id].H))
 			pv.Sel = p.copy.selection()
 			pv.CopyCur = p.copy.cursor()
