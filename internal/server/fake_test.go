@@ -96,6 +96,7 @@ func (f *fakePty) Close() error {
 type fakeScreen struct {
 	mu         sync.Mutex
 	consumed   bytes.Buffer
+	writeSizes []int // len(p) for every Write call, in order; see pump chunking tests
 	cols, rows int
 	hist       int
 	histLimit  int
@@ -115,6 +116,7 @@ func (s *fakeScreen) Write(p []byte) (int, error) {
 	if len(p) > 0 {
 		s.dirty = true
 	}
+	s.writeSizes = append(s.writeSizes, len(p))
 	n, _ := s.consumed.Write(p)
 	if s.writeErr != nil {
 		err := s.writeErr
@@ -122,6 +124,13 @@ func (s *fakeScreen) Write(p []byte) (int, error) {
 		return n, err
 	}
 	return n, nil
+}
+
+// recordedWriteSizes returns len(p) for every Write call so far, in order.
+func (s *fakeScreen) recordedWriteSizes() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.writeSizes...)
 }
 
 // setWriteErr makes the next Write call return err instead of nil, to

@@ -71,6 +71,20 @@ func startPane(id layout.PaneID, cols, rows int, shell string, histLimit int) (*
 	return &pane{id: id, pt: pt, vt: vt}, nil
 }
 
+// maxWriteChunk bounds how many bytes pump feeds the emulator per vt.Write
+// call. vterm.Term.Write holds the emulator's lock for the whole call, and
+// the server's single broadcast goroutine needs that lock (via Dirty-free
+// polling plus SnapshotInto) to render every session's frame; a pane emitting
+// a full 32 KiB pty read in one Write would hold the lock for however long
+// that takes to parse, delaying every other pane and session behind it.
+// Splitting into smaller slices lets the lock be released and re-acquired
+// between them, so a snapshot queued behind a big burst gets in promptly
+// instead of waiting for the whole burst. vterm.Term.Write carries an
+// incomplete trailing UTF-8 rune across calls (see its pending field), so
+// slicing here at an arbitrary byte boundary can never corrupt a multi-byte
+// character even if it lands mid-rune.
+const maxWriteChunk = 4096
+
 // pump copies pty output into the emulator until the child exits or errors.
 // It calls onExit exactly once when the pane's process is finished.
 //
@@ -88,17 +102,31 @@ func (p *pane) pump(onExit func(*pane)) {
 	for {
 		n, err := p.pt.Read(buf)
 		if n > 0 {
-			if _, werr := p.vt.Write(buf[:n]); werr != nil && errors.Is(werr, vterm.ErrEmulatorPanic) {
-				if p.logf != nil {
-					p.logf("pane %d: %v", p.id, werr)
-				}
-			}
+			p.feed(buf[:n])
 		}
 		if err != nil {
 			break
 		}
 	}
 	onExit(p)
+}
+
+// feed writes data into the emulator in slices of at most maxWriteChunk bytes
+// (see its doc comment for why) and logs a recovered emulator panic exactly
+// as pump always has.
+func (p *pane) feed(data []byte) {
+	for len(data) > 0 {
+		chunk := data
+		if len(chunk) > maxWriteChunk {
+			chunk = chunk[:maxWriteChunk]
+		}
+		if _, werr := p.vt.Write(chunk); werr != nil && errors.Is(werr, vterm.ErrEmulatorPanic) {
+			if p.logf != nil {
+				p.logf("pane %d: %v", p.id, werr)
+			}
+		}
+		data = data[len(chunk):]
+	}
 }
 
 func (p *pane) resize(cols, rows int) {
