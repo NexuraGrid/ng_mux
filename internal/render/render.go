@@ -63,6 +63,20 @@ func (f *Frame) reset(cols, rows int) {
 	}
 }
 
+// CopyFrom makes f an exact copy of src's cells and cursor, reusing f's cell
+// buffer when it is large enough. A client keeps such a copy of the last frame
+// it was sent, so later diffs never depend on a session's reusable buffers.
+func (f *Frame) CopyFrom(src *Frame) {
+	f.Cols, f.Rows = src.Cols, src.Rows
+	f.CurX, f.CurY, f.CurVisible = src.CurX, src.CurY, src.CurVisible
+	if cap(f.Cells) < len(src.Cells) {
+		f.Cells = make([]Cell, len(src.Cells))
+	} else {
+		f.Cells = f.Cells[:len(src.Cells)]
+	}
+	copy(f.Cells, src.Cells)
+}
+
 // scratchCovered returns an all-false []bool of length n backed by f.covered.
 func (f *Frame) scratchCovered(n int) []bool {
 	if cap(f.covered) < n {
