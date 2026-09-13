@@ -62,7 +62,7 @@ reliable for shell output; capture is skipped entirely while a full-screen app
 **Linux / macOS** — one line, no toolchain needed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/MauricioJC3/ng_mux/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.sh | sh
 ```
 
 It drops the `ngmux` binary in `~/.local/bin` (override with `NGMUX_INSTALL_DIR`)
@@ -71,7 +71,7 @@ and adds that directory to your shell's `PATH` if it is missing.
 **Windows** — from any shell (cmd, PowerShell, Nushell, Git Bash):
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/MauricioJC3/ng_mux/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.ps1 | iex"
 ```
 
 Already in a PowerShell prompt? `irm …/install.ps1 | iex` on its own works too.

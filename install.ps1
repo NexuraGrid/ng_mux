@@ -1,7 +1,7 @@
 # ngmux installer for Windows — downloads the latest prebuilt binary from
 # GitHub Releases and puts it on your PATH.
 #
-#   irm https://raw.githubusercontent.com/MauricioJC3/ng_mux/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.ps1 | iex
 #
 # Run elevated (Administrator) to install for every user under
 # %ProgramFiles%\ngmux and the system PATH; otherwise it installs just for you
@@ -13,7 +13,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$repo = 'MauricioJC3/ng_mux'
+$repo = 'NexuraGrid/ng_mux'
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 	).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
