@@ -21,6 +21,11 @@ type csiEscape struct {
 	mode byte
 	priv bool
 	gt   bool // leading '>' marker, e.g. secondary DA: "ESC[>c", "ESC[>0c"
+	// marked is set for any leading private marker ('?', '>', '<', '='). A
+	// marked final byte is a different command from the unmarked one:
+	// "ESC[>4;2m" is XTMODKEYS, not SGR, and "ESC[>1u" is a kitty keyboard
+	// push, not DECRC.
+	marked bool
 }
 
 func (c *csiEscape) reset() {
@@ -29,6 +34,7 @@ func (c *csiEscape) reset() {
 	c.mode = 0
 	c.priv = false
 	c.gt = false
+	c.marked = false
 }
 
 func (c *csiEscape) put(b byte) bool {
@@ -57,7 +63,10 @@ func (c *csiEscape) parse() {
 		// tripping strconv.Atoi on a leading '>' and silently truncating args.
 		c.gt = true
 		s = s[1:]
+	case '<', '=':
+		s = s[1:]
 	}
+	c.marked = len(s) < len(c.buf) // a marker byte was stripped
 	s = s[:len(s)-1]
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
@@ -216,6 +225,9 @@ func (t *State) handleCSI() {
 	case 'h': // SM - set terminal mode
 		t.setMode(c.priv, true, c.args)
 	case 'm': // SGR - terminal attribute (color)
+		if c.marked {
+			goto unknown // XTMODKEYS and friends; never attributes
+		}
 		t.setAttr(c.args)
 	case 'n':
 		switch c.arg(0, 0) {
@@ -232,8 +244,14 @@ func (t *State) handleCSI() {
 			t.moveAbsTo(0, 0)
 		}
 	case 's': // DECSC - save cursor position (ANSI.SYS)
+		if c.marked {
+			goto unknown
+		}
 		t.saveCursor()
 	case 'u': // DECRC - restore cursor position (ANSI.SYS)
+		if c.marked {
+			goto unknown // kitty keyboard protocol push/pop/query/set
+		}
 		t.restoreCursor()
 	}
 	return
