@@ -178,8 +178,17 @@ for a left/right split); it is the inverse of `Ctrl-b !`.
 
 ### Config file
 
-`~/.config/ngmux/ngmux.conf` (or `%APPDATA%\ngmux\ngmux.conf`; override with
-`NGMUX_CONFIG`). One directive per line:
+ngmux reads the first of these that applies:
+
+1. `$NGMUX_CONFIG`, if set.
+2. Linux and macOS: `$XDG_CONFIG_HOME/ngmux/ngmux.conf` (when
+   `XDG_CONFIG_HOME` is set), then `~/.config/ngmux/ngmux.conf` — the first
+   that exists.
+3. Otherwise the OS config directory: `%APPDATA%\ngmux\ngmux.conf` on Windows,
+   `~/Library/Application Support/ngmux/ngmux.conf` on macOS.
+
+The file is read when the server starts, so run `ngmux kill-server` (which
+ends every session) after editing it. One directive per line:
 
 ```
 set prefix C-a
@@ -219,11 +228,8 @@ Unknown lines are logged and skipped, never fatal.
 
 ### Colours
 
-Colours live in the same config file: `$NGMUX_CONFIG` if set, otherwise
-`ngmux/ngmux.conf` under your user config directory (`~/.config` on Linux,
-`~/Library/Application Support` on macOS, `%APPDATA%` on Windows). The file is
-read when the server starts, so restart the server (`ngmux kill-server`, which ends every session) to apply
-a change.
+Colours live in the same config file (see [Config file](#config-file) for
+where it is read from) and, like every setting, apply when the server starts.
 
 `set theme dark|light|mono` picks the base look. Each key below then overrides
 one colour of that theme, whichever theme it is; bold, underline and the rest

@@ -73,19 +73,50 @@ func Default() Config {
 	}
 }
 
-// Path returns the location config is read from, honouring NGMUX_CONFIG then
-// the per-OS user config directory.
+// Path returns the location config is read from. NGMUX_CONFIG always wins.
+// Otherwise, outside Windows, the XDG Base Directory locations are tried
+// first — $XDG_CONFIG_HOME/ngmux/ngmux.conf (when set to an absolute path),
+// then ~/.config/ngmux/ngmux.conf — and the first one that exists is used.
+// That is where macOS users of tmux, nvim and the like expect it, whereas Go's
+// per-OS default on macOS is ~/Library/Application Support. Failing those, it
+// is the per-OS user config directory (%APPDATA% on Windows), which keeps
+// every location older releases read working.
 func Path() string {
-	if p := os.Getenv("NGMUX_CONFIG"); p != "" {
+	return resolvePath(runtime.GOOS, os.Getenv, fileExists, os.UserConfigDir)
+}
+
+// resolvePath is Path with its environment injected, for tests.
+func resolvePath(goos string, getenv func(string) string, exists func(string) bool, userConfigDir func() (string, error)) string {
+	if p := getenv("NGMUX_CONFIG"); p != "" {
 		return p
 	}
-	if dir, err := os.UserConfigDir(); err == nil {
+	if goos != "windows" {
+		var candidates []string
+		// The spec says a relative XDG_CONFIG_HOME is invalid and is ignored.
+		if x := getenv("XDG_CONFIG_HOME"); x != "" && filepath.IsAbs(x) {
+			candidates = append(candidates, filepath.Join(x, "ngmux", "ngmux.conf"))
+		}
+		if home := getenv("HOME"); home != "" {
+			candidates = append(candidates, filepath.Join(home, ".config", "ngmux", "ngmux.conf"))
+		}
+		for _, c := range candidates {
+			if exists(c) {
+				return c
+			}
+		}
+	}
+	if dir, err := userConfigDir(); err == nil {
 		return filepath.Join(dir, "ngmux", "ngmux.conf")
 	}
-	if runtime.GOOS == "windows" {
-		return filepath.Join(os.Getenv("APPDATA"), "ngmux", "ngmux.conf")
+	if goos == "windows" {
+		return filepath.Join(getenv("APPDATA"), "ngmux", "ngmux.conf")
 	}
-	return filepath.Join(os.Getenv("HOME"), ".config", "ngmux", "ngmux.conf")
+	return filepath.Join(getenv("HOME"), ".config", "ngmux", "ngmux.conf")
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 // colourTarget is the palette colour a per-element colour key sets: a style
