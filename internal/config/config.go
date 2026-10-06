@@ -6,8 +6,12 @@
 //	set default-shell /bin/bash
 //	set mouse on
 //	set escape-time 25
-//	set status-bg 4
-//	set status-fg 7
+//	set theme light
+//	set status-bg blue
+//	set status-fg bright-white
+//	set tab-active-bg 2
+//	set border-active-fg magenta
+//	set pane-titles off
 //	bind s split-vertical
 //	bind v split-horizontal
 //
@@ -23,6 +27,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/MauricioJC3/ng_mux/internal/theme"
+	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
 // DefaultPrefix is Ctrl-b, matching tmux.
@@ -35,10 +42,13 @@ type Config struct {
 	DefaultShell string            // overrides $SHELL / platform default when set
 	Mouse        bool              // reserved for a later phase
 	EscapeTime   int               // ms to wait for a sequence after a lone Esc (tmux's escape-time)
-	StatusFG     int               // status bar foreground colour index (0..255)
-	StatusBG     int               // status bar background colour index (0..255)
+	StatusFG     int               // status bar text colour (0..255 or theme.Default); -1 = the theme's
+	StatusBG     int               // status bar background colour (0..255 or theme.Default); -1 = the theme's
 	SetClipboard bool              // copy-mode yank also sets the OS clipboard via OSC 52
+	Theme        string            // palette name for all chrome: dark, light or mono
+	PaneTitles   bool              // a title line above each pane of a split window
 	Binds        map[string]string // key (single rune) -> command name
+	Colours      map[string]int    // per-element colour key (see colourKeys) -> colour
 
 	// Warnings holds human-readable notes about lines that were ignored.
 	Warnings []string
@@ -46,16 +56,20 @@ type Config struct {
 
 // Default returns the built-in configuration. Mouse support is on by default;
 // disable it with `set mouse off` if you want native terminal selection.
+// StatusFG/StatusBG start unset (-1) so the theme picks the bar's colours.
 func Default() Config {
 	return Config{
 		Prefix:       DefaultPrefix,
 		HistoryLimit: 2000,
 		Mouse:        true,
 		EscapeTime:   25,
-		StatusFG:     0,
-		StatusBG:     7,
+		StatusFG:     -1,
+		StatusBG:     -1,
 		SetClipboard: true,
+		Theme:        theme.DefaultName,
+		PaneTitles:   true,
 		Binds:        map[string]string{},
+		Colours:      map[string]int{},
 	}
 }
 
@@ -72,6 +86,65 @@ func Path() string {
 		return filepath.Join(os.Getenv("APPDATA"), "ngmux", "ngmux.conf")
 	}
 	return filepath.Join(os.Getenv("HOME"), ".config", "ngmux", "ngmux.conf")
+}
+
+// colourTarget is the palette colour a per-element colour key sets: a style
+// and which side of it the user sees.
+type colourTarget struct {
+	style func(*theme.Palette) *theme.Style
+	bg    bool // the visible background rather than the text
+}
+
+// colourKeys are the per-element colour settings, each overriding one colour
+// of the active theme and leaving its attributes alone.
+var colourKeys = map[string]colourTarget{
+	"session-fg":           {func(p *theme.Palette) *theme.Style { return &p.Session }, false},
+	"session-bg":           {func(p *theme.Palette) *theme.Style { return &p.Session }, true},
+	"tab-fg":               {func(p *theme.Palette) *theme.Style { return &p.Tab }, false},
+	"tab-bg":               {func(p *theme.Palette) *theme.Style { return &p.Tab }, true},
+	"tab-active-fg":        {func(p *theme.Palette) *theme.Style { return &p.Active }, false},
+	"tab-active-bg":        {func(p *theme.Palette) *theme.Style { return &p.Active }, true},
+	"tab-alert-fg":         {func(p *theme.Palette) *theme.Style { return &p.Alert }, false},
+	"tab-alert-bg":         {func(p *theme.Palette) *theme.Style { return &p.Alert }, true},
+	"mode-fg":              {func(p *theme.Palette) *theme.Style { return &p.Mode }, false},
+	"mode-bg":              {func(p *theme.Palette) *theme.Style { return &p.Mode }, true},
+	"border-fg":            {func(p *theme.Palette) *theme.Style { return &p.BorderDim }, false},
+	"border-active-fg":     {func(p *theme.Palette) *theme.Style { return &p.BorderActive }, false},
+	"pane-title-active-fg": {func(p *theme.Palette) *theme.Style { return &p.TitleActive }, false},
+	"pane-title-active-bg": {func(p *theme.Palette) *theme.Style { return &p.TitleActive }, true},
+}
+
+// Palette returns the theme the config names with any explicit status-fg /
+// status-bg and per-element colours applied on top. An unknown theme name
+// (which set already rejects) falls back to the default theme.
+func (c Config) Palette() theme.Palette {
+	pal, ok := theme.Lookup(c.Theme)
+	if !ok {
+		pal, _ = theme.Lookup(theme.DefaultName)
+	}
+	// The bar is drawn in reverse video, so the colour it visibly shows
+	// behind its text is pal.StatusFG and its text colour is pal.StatusBG.
+	if c.StatusFG >= 0 {
+		pal.StatusBG = c.StatusFG
+	}
+	if c.StatusBG >= 0 {
+		pal.StatusFG = c.StatusBG
+	}
+	for key, colour := range c.Colours {
+		t, ok := colourKeys[key]
+		if !ok {
+			continue
+		}
+		st := t.style(&pal)
+		// A reverse-video style shows its FG behind the text and its BG as
+		// the text, so the visible sides swap.
+		if t.bg != (st.Attr&vterm.AttrReverse != 0) {
+			st.BG = colour
+		} else {
+			st.FG = colour
+		}
+	}
+	return pal
 }
 
 // Load reads and parses Path(). A missing file is not an error: it returns the
@@ -173,17 +246,35 @@ func (c *Config) set(name, value string) error {
 	case "status-fg":
 		n, err := parseColor(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %v", name, err)
 		}
 		c.StatusFG = n
 	case "status-bg":
 		n, err := parseColor(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %v", name, err)
 		}
 		c.StatusBG = n
+	case "theme":
+		if _, ok := theme.Lookup(value); !ok {
+			return fmt.Errorf("theme must be one of %s, got %q", strings.Join(theme.Names(), ", "), value)
+		}
+		c.Theme = value
+	case "pane-titles":
+		on, err := parseBool(value)
+		if err != nil {
+			return err
+		}
+		c.PaneTitles = on
 	default:
-		return fmt.Errorf("unknown setting %q", name)
+		if _, ok := colourKeys[name]; !ok {
+			return fmt.Errorf("unknown setting %q", name)
+		}
+		n, err := parseColor(value)
+		if err != nil {
+			return fmt.Errorf("%s: %v", name, err)
+		}
+		c.Colours[name] = n
 	}
 	return nil
 }
@@ -225,10 +316,31 @@ func parseBool(s string) (bool, error) {
 	}
 }
 
+// colourNames are the eight base colour names, by xterm index.
+var colourNames = []string{
+	"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+}
+
+// parseColor reads a colour value: an xterm index 0..255, one of the eight
+// colour names (0-7), bright- plus a name (8-15), or "default" for the
+// terminal's own colour (theme.Default). Names are case-insensitive.
 func parseColor(s string) (int, error) {
+	name := strings.ToLower(s)
+	if name == "default" {
+		return theme.Default, nil
+	}
+	base, bright := strings.CutPrefix(name, "bright-")
+	for i, n := range colourNames {
+		if base == n {
+			if bright {
+				return i + 8, nil
+			}
+			return i, nil
+		}
+	}
 	n, err := strconv.Atoi(s)
 	if err != nil || n < 0 || n > 255 {
-		return 0, fmt.Errorf("colour must be 0..255, got %q", s)
+		return 0, fmt.Errorf("colour must be 0..255, a colour name or default, got %q", s)
 	}
 	return n, nil
 }

@@ -22,6 +22,16 @@ type window struct {
 	// rendering and sizing treat it as if it owned the whole content area.
 	zoom layout.PaneID
 
+	// activityShown is whether the status bar last drew this window's tab as
+	// having unseen output. session.dirty compares it with hasOutput so a
+	// hidden window that starts printing triggers exactly one repaint.
+	activityShown bool
+
+	// titles reserves a title line above each pane while the window shows
+	// two or more tiled panes (see outer). Set by the session from its
+	// pane-titles option.
+	titles bool
+
 	shell     string
 	histLimit int
 	newPane   paneFactory
@@ -76,8 +86,33 @@ func wrapWindow(id int, name string, p *pane, shell string, histLimit int, newPa
 // resizeStep is how many cells one resize keystroke moves a boundary.
 const resizeStep = 2
 
+// outer is the area the split tree is laid out in, for a cols x rows content
+// area. It is the single place pane titles take their room: a titled window
+// gives up its top row, where the top panes' titles go, and every other
+// pane's title sits on the divider row already above it, as in tmux. Every
+// rectangle derived from it (pty sizes, hit-testing, mouse and copy-mode
+// coordinates, the cursor) therefore already accounts for the titles.
 func (w *window) outer(cols, rows int) layout.Rect {
+	return w.outerFor(cols, rows, len(w.panes))
+}
+
+// outerFor is outer for a window holding n panes, so a split or join can
+// size the new layout for the pane count it is about to have.
+func (w *window) outerFor(cols, rows, n int) layout.Rect {
+	if w.titles && n > 1 && rows > 1 {
+		return layout.Rect{X: 0, Y: 1, W: cols, H: rows - 1}
+	}
+	return w.full(cols, rows)
+}
+
+// full is the whole content area, which a zoomed pane fills untitled.
+func (w *window) full(cols, rows int) layout.Rect {
 	return layout.Rect{X: 0, Y: 0, W: cols, H: rows}
+}
+
+// titled reports whether panes are currently drawn with title lines.
+func (w *window) titled() bool {
+	return w.titles && len(w.panes) > 1 && w.zoom == 0
 }
 
 // applyLayout pushes each pane's computed rectangle to its pty and emulator.
@@ -133,11 +168,12 @@ func (w *window) unzoom(cols, rows int) {
 // split adds a pane beside the active one, sizing it to the new layout.
 func (w *window) split(sess *session, dir layout.Orientation, cols, rows int) error {
 	newID := sess.nextPane()
-	newTree, err := layout.Split(w.tree, w.active, newID, dir, w.outer(cols, rows))
+	outer := w.outerFor(cols, rows, len(w.panes)+1)
+	newTree, err := layout.Split(w.tree, w.active, newID, dir, outer)
 	if err != nil {
 		return err
 	}
-	r := layout.Compute(newTree, w.outer(cols, rows))[newID]
+	r := layout.Compute(newTree, outer)[newID]
 	p, err := w.newPane(newID, max1(r.W), max1(r.H), w.shell, w.histLimit)
 	if err != nil {
 		return err
@@ -174,7 +210,7 @@ func (w *window) enterCopy(cols, rows int) {
 	}
 	r := layout.Compute(w.tree, w.outer(cols, rows))[w.active]
 	if w.zoom == w.active {
-		r = w.outer(cols, rows) // the zoomed pane owns the whole content area
+		r = w.full(cols, rows) // the zoomed pane owns the whole content area
 	}
 	p.copy = newCopyState(max1(r.W), max1(r.H))
 	p.copy.seen = p.vt.ScrolledTotal()
@@ -195,7 +231,7 @@ func (w *window) hitPane(rects map[layout.PaneID]layout.Rect, x, y int) layout.P
 // for zoom the same way hitPane does.
 func (w *window) rectOf(rects map[layout.PaneID]layout.Rect, cols, rows int, id layout.PaneID) layout.Rect {
 	if zp := w.zoomedPane(); zp != nil && zp.id == id {
-		return w.outer(cols, rows)
+		return w.full(cols, rows)
 	}
 	return rects[id]
 }
@@ -277,7 +313,7 @@ func (w *window) detachPane(id layout.PaneID, cols, rows int) *pane {
 // p.logf here would race with pump's reads of it; logf is server-wide and
 // does not change across a pane's lifetime anyway.
 func (w *window) adoptPane(p *pane, dir layout.Orientation, cols, rows int) error {
-	newTree, err := layout.Split(w.tree, w.active, p.id, dir, w.outer(cols, rows))
+	newTree, err := layout.Split(w.tree, w.active, p.id, dir, w.outerFor(cols, rows, len(w.panes)+1))
 	if err != nil {
 		return err
 	}
@@ -303,13 +339,22 @@ func (w *window) closeAll() {
 // storage (one entry per pane). Both are returned so the session can keep the
 // grown backing arrays for the next frame. A pane in copy-mode is drawn from
 // its scrollback view with the selection highlighted. When showNums is set each
-// pane is badged with its select-pane index (display-panes).
+// pane is badged with its select-pane index (display-panes). A titled window
+// (see titled) gives each pane a title: that same index, then the title its
+// program set, or the window name if it set none.
 func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, snaps []vterm.Snapshot) ([]render.PaneView, []vterm.Snapshot) {
-	numOf := map[layout.PaneID]int{}
-	if showNums {
-		for i, id := range layout.Panes(w.tree) {
-			numOf[id] = i
+	titled := w.titled()
+	var order []layout.PaneID // select-pane order, for badges and titles
+	if showNums || titled {
+		order = layout.Panes(w.tree)
+	}
+	numOf := func(id layout.PaneID) int {
+		for i, o := range order {
+			if o == id {
+				return i
+			}
 		}
+		return 0
 	}
 
 	if zp := w.zoomedPane(); zp != nil {
@@ -319,10 +364,10 @@ func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, s
 			snaps = snaps[:1]
 		}
 		sn := &snaps[0]
-		full := w.outer(cols, rows)
+		full := w.full(cols, rows)
 		pv := render.PaneView{ID: w.zoom, Rect: full, Active: true}
 		if showNums {
-			pv.Badge = fmt.Sprintf(" %d ", numOf[w.zoom])
+			pv.Badge = fmt.Sprintf(" %d ", numOf(w.zoom))
 		}
 		if zp.copy != nil {
 			zp.syncCopy()
@@ -355,7 +400,7 @@ func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, s
 		i++
 		pv := render.PaneView{ID: id, Rect: rects[id], Active: id == w.active}
 		if showNums {
-			pv.Badge = fmt.Sprintf(" %d ", numOf[id])
+			pv.Badge = fmt.Sprintf(" %d ", numOf(id))
 		}
 		if p.copy != nil {
 			p.syncCopy()
@@ -368,6 +413,14 @@ func (w *window) views(cols, rows int, showNums bool, views []render.PaneView, s
 			p.vt.SnapshotInto(sn)
 		}
 		pv.Snap = sn
+		if titled {
+			pv.ShowTitle = true
+			pv.TitleNum = numOf(id)
+			pv.Title = sn.Title
+			if pv.Title == "" {
+				pv.Title = w.name
+			}
+		}
 		views = append(views, pv)
 	}
 	return views, snaps
@@ -378,4 +431,22 @@ func max1(n int) int {
 		return 1
 	}
 	return n
+}
+
+// hasOutput reports whether any pane has produced output since its flag was
+// last cleared (see pane.output).
+func (w *window) hasOutput() bool {
+	for _, p := range w.panes {
+		if p.output.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// clearOutput marks every pane's output as seen.
+func (w *window) clearOutput() {
+	for _, p := range w.panes {
+		p.output.Store(false)
+	}
 }

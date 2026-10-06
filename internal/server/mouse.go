@@ -142,6 +142,12 @@ func (s *session) routePress(w *window, rects map[layout.PaneID]layout.Rect, col
 	id := w.hitPane(rects, x, y)
 	if id == 0 {
 		s.drag = dragFrom(rects, x, y)
+		// A press on a pane's title line focuses that pane; when the line is
+		// also the divider above it, the press still starts a resize drag.
+		if t := titleAt(w, rects, x, y); t != 0 && t != w.active {
+			w.active = t
+			return nil, nil, true
+		}
 		return nil, nil, false
 	}
 	focusChanged := id != w.active
@@ -236,6 +242,21 @@ func (s *session) routeRelease(w *window, rects map[layout.PaneID]layout.Rect, c
 func paneAt(rects map[layout.PaneID]layout.Rect, x, y int) layout.PaneID {
 	for id, r := range rects {
 		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
+			return id
+		}
+	}
+	return 0
+}
+
+// titleAt returns the pane whose title line covers (x,y) — the row just above
+// its rectangle, across its width — or 0 when the window has no titles or the
+// point is on none.
+func titleAt(w *window, rects map[layout.PaneID]layout.Rect, x, y int) layout.PaneID {
+	if !w.titled() {
+		return 0
+	}
+	for id, r := range rects {
+		if y == r.Y-1 && x >= r.X && x < r.X+r.W {
 			return id
 		}
 	}

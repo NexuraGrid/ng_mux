@@ -100,6 +100,10 @@ type Snapshot struct {
 	Cells      []Cell // row-major, len == Cols*Rows
 	CurX, CurY int
 	CurVisible bool
+
+	// Title is the window title the program last set (OSC 0/2), or "" if it
+	// never set one.
+	Title string
 }
 
 // At returns the cell at (x,y). Out-of-range coordinates return a blank cell.
@@ -438,6 +442,7 @@ func (t *Term) SnapshotInto(dst *Snapshot) {
 		dst.Cells = dst.Cells[:need]
 	}
 	dst.Cols, dst.Rows = cols, rows
+	dst.Title = t.t.Title()
 	dst.CurVisible = t.t.CursorVisible()
 	cur := t.t.Cursor()
 	dst.CurX, dst.CurY = cur.X, cur.Y
@@ -479,6 +484,7 @@ func (t *Term) ScrollbackView(offset, viewRows int) Snapshot {
 
 	t.t.Lock()
 	defer t.t.Unlock()
+	snap.Title = t.t.Title()
 	for r := 0; r < viewRows; r++ {
 		for x := 0; x < cols; x++ {
 			snap.Cells[r*cols+x] = blankCell()

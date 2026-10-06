@@ -5,9 +5,10 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/MauricioJC3/ng_mux/internal/termio"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
+	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
 // whichKeyRow is one line of the prefix cheat-sheet: the key(s) pressed after
@@ -17,34 +18,61 @@ type whichKeyRow struct {
 	desc string
 }
 
-// builtinWhichKey mirrors defaultKeyCommands (plus the digit and arrow keys
-// that resolveKey handles specially) in reading order with human labels.
-// resolveKey stays the single source of truth for behaviour; this is display
-// only, so a binding change must be reflected here by hand.
-var builtinWhichKey = []whichKeyRow{
-	{`"`, "split pane — top / bottom"},
-	{"%", "split pane — left / right"},
-	{"o", "focus next pane"},
-	{";", "focus previous pane"},
-	{"← ↑ ↓ →", "focus pane by direction"},
-	{"H J K L", "resize the focused pane"},
-	{"z", "zoom the focused pane — toggle full screen"},
-	{"q", "flash each pane's index number"},
-	{"{ / }", "swap the focused pane with the previous / next"},
-	{"!", "break the focused pane into its own window"},
-	{"x", "close the focused pane"},
-	{"c", "new window"},
-	{"n / p", "next / previous window"},
-	{"0 – 9", "select window by number"},
-	{"& ", "close the current window"},
-	{"( / )", "previous / next session"},
-	{"m", "session help — new / attach / list"},
-	{"[", "copy mode — scroll and select"},
-	{"]", "paste the copy buffer"},
-	{":", "command prompt"},
-	{"d", "detach — leave the session running"},
-	{"Ctrl-b", "send a literal Ctrl-b to the pane"},
+// whichKeySection is a titled group of cheat-sheet rows. A section is drawn as
+// one block and is never split across the panel's columns.
+type whichKeySection struct {
+	title string
+	rows  []whichKeyRow
 }
+
+// whichKeyPrefixKey stands for the prefix's own label in a row's keys; it is
+// filled in by whichKeySections, so a custom prefix reads correctly.
+const whichKeyPrefixKey = "{prefix}"
+
+// builtinWhichKey mirrors defaultKeyCommands plus the keys forwardInput and
+// resolveKey handle specially (digits, arrows, ':', ',', '$', 'm', the prefix
+// itself) in reading order with human labels. resolveKey and forwardInput stay
+// the single source of truth for behaviour; this table is display only, so a
+// binding change must be reflected here by hand. Descriptions are kept short
+// (25 columns at most) so two columns fit an 80-column terminal.
+var builtinWhichKey = []whichKeySection{
+	{"Panes", []whichKeyRow{
+		{`"`, "split top / bottom"},
+		{"%", "split left / right"},
+		{"o / ;", "next / previous pane"},
+		{"arrows", "↑ ← previous · ↓ → next"},
+		{"H J K L", "resize pane"},
+		{"z", "zoom pane (toggle)"},
+		{"q", "show pane numbers"},
+		{"{ / }", "swap with previous / next"},
+		{"!", "break into own window"},
+		{"x", "close pane"},
+	}},
+	{"Windows (tabs)", []whichKeyRow{
+		{"c", "new window"},
+		{",", "rename window"},
+		{"n / p", "next / previous window"},
+		{"0-9", "select by number"},
+		{"&", "close window"},
+	}},
+	{"Sessions", []whichKeyRow{
+		{"$", "rename session"},
+		{"( / )", "previous / next session"},
+		{"m", "session help"},
+		{"d", "detach (keeps running)"},
+	}},
+	{"Copy & paste", []whichKeyRow{
+		{"[", "copy mode / scrollback"},
+		{"]", "paste"},
+	}},
+	{"Other", []whichKeyRow{
+		{":", "command prompt"},
+		{whichKeyPrefixKey, "send a literal prefix"},
+	}},
+}
+
+// whichKeyConfigTitle heads the section listing the user's own bindings.
+const whichKeyConfigTitle = "Your bindings"
 
 // whichKeyMinCols / whichKeyMinRows are the smallest terminal the popup will
 // draw itself on; below that it silently does nothing.
@@ -53,58 +81,65 @@ const (
 	whichKeyMinRows = 8
 )
 
-// showWhichKey draws the prefix cheat-sheet as a panel in the lower-right
-// corner and returns a function that erases it again. It is called right after
-// the prefix key is pressed, while the client blocks waiting for the next key,
-// so the panel behaves like Neovim's which-key: press the prefix, see the
+// whichKey layout constants: the gap between side-by-side columns, the widest
+// key and description columns (longer text is cut with "…").
+const (
+	whichKeyGap      = 3
+	whichKeyMaxKeyW  = 10
+	whichKeyMaxDescW = 25
+)
+
+// showWhichKey draws the prefix cheat-sheet as a modal panel centred above the
+// status bar and returns a function that erases it again. It is called right
+// after the prefix key is pressed, while the client blocks waiting for the next
+// key, so the panel behaves like Neovim's which-key: press the prefix, see the
 // choices, press a key. A concurrent server frame can repaint a pane behind the
 // panel; that is the same trade-off the ':' prompt makes and it self-heals on
 // the Refresh the caller sends after hiding.
-func showWhichKey(out *lockedWriter, term *os.File, km keymap) func() {
+func showWhichKey(out *lockedWriter, term *os.File, km keymap, pal *theme.Palette) func() {
 	size, err := termio.GetSize(term)
 	if err != nil || size.Cols < whichKeyMinCols || size.Rows < whichKeyMinRows {
 		return func() {}
 	}
 
-	rows := append([]whichKeyRow(nil), builtinWhichKey...)
-	rows = append(rows, configWhichKey(km)...)
-
-	box := whichKeyBox(prefixLabel(km.prefix), rows, size.Cols-2, size.Rows-3)
-	if len(box) == 0 {
+	// Everything above the status bar (the last row) is available.
+	avail := size.Rows - 1
+	pop, ok := whichKeyPopup(prefixLabel(km.prefix), whichKeySections(km), size.Cols-2, avail)
+	if !ok {
 		return func() {}
 	}
-	boxW := utf8.RuneCountInString(box[0])
-	boxH := len(box)
+	startRow := max((avail-pop.height())/2+1, 1)
+	startCol := max((size.Cols-pop.width())/2+1, 1)
 
-	startRow := size.Rows - 1 - boxH // keep the status bar (last row) clear
-	if startRow < 1 {
-		startRow = 1
-	}
-	startCol := size.Cols - boxW - 1
-	if startCol < 1 {
-		startCol = 1
-	}
-
-	const (
-		panelOn  = "\x1b[0m\x1b[48;5;236m\x1b[38;5;253m"
-		panelOff = "\x1b[0m"
-	)
 	var b strings.Builder
 	b.WriteString("\x1b[?25l") // hide the cursor while the panel is up
-	for i, line := range box {
-		fmt.Fprintf(&b, "\x1b[%d;%dH%s%s%s", startRow+i, startCol, panelOn, line, panelOff)
-	}
+	pop.paint(&b, startRow, startCol, pal)
 	out.WriteString(b.String())
 
 	return func() {
 		var c strings.Builder
-		blank := strings.Repeat(" ", boxW)
-		for i := 0; i < boxH; i++ {
-			fmt.Fprintf(&c, "\x1b[%d;%dH%s", startRow+i, startCol, blank)
-		}
+		pop.erase(&c, startRow, startCol)
 		c.WriteString("\x1b[?25h")
 		out.WriteString(c.String())
 	}
+}
+
+// whichKeySections is the full cheat-sheet for km: the built-in sections with
+// the prefix label filled in, then the user's bindings when there are any.
+func whichKeySections(km keymap) []whichKeySection {
+	label := prefixLabel(km.prefix)
+	out := make([]whichKeySection, 0, len(builtinWhichKey)+1)
+	for _, s := range builtinWhichKey {
+		rows := make([]whichKeyRow, len(s.rows))
+		for i, r := range s.rows {
+			rows[i] = whichKeyRow{keys: strings.ReplaceAll(r.keys, whichKeyPrefixKey, label), desc: r.desc}
+		}
+		out = append(out, whichKeySection{title: s.title, rows: rows})
+	}
+	if cfg := configWhichKey(km); len(cfg) > 0 {
+		out = append(out, whichKeySection{title: whichKeyConfigTitle, rows: cfg})
+	}
+	return out
 }
 
 // configWhichKey lists the user's own `bind` directives so a custom config
@@ -124,102 +159,145 @@ func configWhichKey(km keymap) []whichKeyRow {
 		if !ok {
 			line = km.binds[k]
 		}
-		out = append(out, whichKeyRow{keys: k, desc: line + "  (config)"})
+		out = append(out, whichKeyRow{keys: k, desc: line})
 	}
 	return out
 }
 
 // whichKeyBox renders the cheat-sheet as a bordered panel no wider than
-// maxWidth and no taller than maxRows runes/lines. Rows that do not fit are
-// dropped and replaced with a "+N more" line. It returns the panel as equal-
-// width plain-text lines (no ANSI); the caller adds colour and position.
-func whichKeyBox(title string, rows []whichKeyRow, maxWidth, maxRows int) []string {
-	if maxWidth < 12 || maxRows < 3 || len(rows) == 0 {
+// maxWidth columns and no taller than maxRows lines. Rows that do not fit are
+// dropped from the end and replaced with a "+N more" note. It returns the
+// panel as equal-width plain-text lines (no ANSI), or nil when it cannot fit.
+func whichKeyBox(title string, sections []whichKeySection, maxWidth, maxRows int) []string {
+	pop, ok := whichKeyPopup(title, sections, maxWidth, maxRows)
+	if !ok {
 		return nil
 	}
+	return pop.lines()
+}
 
-	keyW := 0
-	for _, r := range rows {
-		if n := utf8.RuneCountInString(r.keys); n > keyW {
-			keyW = n
+// whichKeyPopup is whichKeyBox's layout as a popup, ready to paint. Sections
+// go in two columns side by side when maxWidth allows it, one otherwise.
+func whichKeyPopup(title string, sections []whichKeySection, maxWidth, maxRows int) (popup, bool) {
+	if maxWidth < 12 || maxRows < 3 {
+		return popup{}, false
+	}
+
+	keyW, descW, total := 0, 0, 0
+	for _, s := range sections {
+		for _, r := range s.rows {
+			keyW = max(keyW, vterm.StringWidth(r.keys))
+			descW = max(descW, vterm.StringWidth(r.desc))
+			total++
 		}
 	}
-	if keyW > 10 {
-		keyW = 10
+	if total == 0 {
+		return popup{}, false
+	}
+	keyW = min(keyW, whichKeyMaxKeyW)
+	descW = min(descW, whichKeyMaxDescW)
+	for _, s := range sections {
+		// A heading spans key + "  " + desc and needs its title plus a little
+		// rule.
+		descW = max(descW, vterm.StringWidth(s.title)+2-keyW-2)
 	}
 
-	// Panel width: "│ " + keys + "  " + desc + " │". Grow to the longest desc,
-	// then clamp to maxWidth.
-	descW := 0
-	for _, r := range rows {
-		if n := utf8.RuneCountInString(r.desc); n > descW {
-			descW = n
-		}
-	}
-	width := 2 + keyW + 2 + descW + 2
-	if width > maxWidth {
-		width = maxWidth
-		descW = width - 2 - keyW - 2 - 2
+	ncols := 1
+	if 4+2*(keyW+2+descW)+whichKeyGap <= maxWidth {
+		ncols = 2
+	} else if 4+keyW+2+descW > maxWidth {
+		descW = maxWidth - 4 - keyW - 2
 	}
 	if descW < 4 {
-		return nil
+		return popup{}, false
 	}
 
-	bodyCap := maxRows - 2 // header + footer
+	bodyCap := maxRows - 2 // top + bottom border
 	if bodyCap < 1 {
-		return nil
+		return popup{}, false
 	}
+
+	// Drop rows from the end until the layout fits, keeping a line for the
+	// "+N more" note once anything is dropped.
+	secs := sections
 	hidden := 0
-	if len(rows) > bodyCap {
-		keep := bodyCap - 1 // leave a line for the "+N more" note
-		if keep < 1 {
-			keep = 1
+	for {
+		capRows := bodyCap
+		if hidden > 0 {
+			capRows--
 		}
-		hidden = len(rows) - keep
-		rows = rows[:keep]
-	}
-
-	inner := width - 2
-	border := func(left, right rune, fill string) string {
-		return string(left) + fill + string(right)
-	}
-	center := func(s string) string {
-		if utf8.RuneCountInString(s) > inner {
-			s = string([]rune(s)[:inner])
+		cols := layoutWhichKey(secs, ncols)
+		if tallest(cols) <= capRows {
+			pop := popup{title: title, footer: "press a key · Esc to cancel", gap: whichKeyGap}
+			for _, c := range cols {
+				pop.cols = append(pop.cols, popupCol{rows: c, keyW: keyW, textW: descW})
+			}
+			if hidden > 0 {
+				pop.note = fmt.Sprintf("+%d more", hidden)
+			}
+			return pop, true
 		}
-		pad := inner - utf8.RuneCountInString(s)
-		l := pad / 2
-		return strings.Repeat("─", l) + s + strings.Repeat("─", pad-l)
+		if capRows < 2 {
+			return popup{}, false
+		}
+		secs = dropLastRow(secs)
+		hidden++
+		if len(secs) == 0 {
+			return popup{}, false
+		}
 	}
+}
 
-	out := make([]string, 0, len(rows)+2)
-	out = append(out, border('┌', '┐', center(" "+title+" ")))
-	for _, r := range rows {
-		keys := fitRunes(r.keys, keyW)
-		desc := fitRunes(r.desc, descW)
-		out = append(out, "│ "+keys+"  "+desc+" │")
+// dropLastRow returns sections without their very last row, and without the
+// last section when that leaves it empty. It never modifies its argument.
+func dropLastRow(secs []whichKeySection) []whichKeySection {
+	out := append([]whichKeySection(nil), secs...)
+	last := out[len(out)-1]
+	last.rows = last.rows[:len(last.rows)-1]
+	if len(last.rows) == 0 {
+		return out[:len(out)-1]
 	}
-	if hidden > 0 {
-		out = append(out, "│ "+fitRunes(fmt.Sprintf("+%d more", hidden), inner-2)+" │")
-	}
-	out = append(out, border('└', '┘', center(" press a key · Esc to cancel ")))
+	out[len(out)-1] = last
 	return out
 }
 
-// fitRunes left-justifies s to exactly w runes, truncating with an ellipsis
-// when it is too long.
-func fitRunes(s string, w int) string {
-	n := utf8.RuneCountInString(s)
-	if n == w {
-		return s
+// layoutWhichKey stacks sections into ncols (1 or 2) columns of popup rows: a
+// heading, its entries, and a blank spacer between sections. With two
+// columns, the sections keep their order (left column first) and the split
+// point is the one that makes the taller column as short as possible.
+func layoutWhichKey(secs []whichKeySection, ncols int) [][]popupRow {
+	stack := func(ss []whichKeySection) []popupRow {
+		var rows []popupRow
+		for i, s := range ss {
+			if i > 0 {
+				rows = append(rows, popupRow{kind: rowSpan})
+			}
+			rows = append(rows, popupRow{text: s.title, kind: rowHeader})
+			for _, r := range s.rows {
+				rows = append(rows, popupRow{key: r.keys, text: r.desc})
+			}
+		}
+		return rows
 	}
-	if n < w {
-		return s + strings.Repeat(" ", w-n)
+	if ncols < 2 || len(secs) < 2 {
+		return [][]popupRow{stack(secs)}
 	}
-	if w <= 1 {
-		return strings.Repeat("…", w)
+	var best [][]popupRow
+	for k := 1; k < len(secs); k++ {
+		cols := [][]popupRow{stack(secs[:k]), stack(secs[k:])}
+		if best == nil || tallest(cols) < tallest(best) {
+			best = cols
+		}
 	}
-	return string([]rune(s)[:w-1]) + "…"
+	return best
+}
+
+func tallest(cols [][]popupRow) int {
+	n := 0
+	for _, c := range cols {
+		n = max(n, len(c))
+	}
+	return n
 }
 
 // prefixLabel renders a prefix byte the way a user would say it: a control byte

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/MauricioJC3/ng_mux/internal/ipc"
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
 	"github.com/MauricioJC3/ng_mux/internal/termio"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
 )
 
 // inReader is the client's stdin, delivered one byte at a time over a channel
@@ -234,7 +236,8 @@ func Attach(ep ipc.Endpoint, session string, in, out *os.File) error {
 	ir := newInReader(in)
 	defer ir.close()
 	inputErr := make(chan error, 1)
-	go func() { inputErr <- forwardInput(ir, w, out, pc, km, escapeDelay, &overlay) }()
+	pal := cfg.Palette()
+	go func() { inputErr <- forwardInput(ir, w, out, pc, km, &pal, escapeDelay, &overlay) }()
 
 	// Main goroutine: server -> stdout, until Bye or disconnect.
 	readErr := readFrames(pc, w, &overlay)
@@ -328,7 +331,7 @@ func firstLine(s string) string {
 // ':' command prompt), everything else straight to the focused pane. term is
 // the real terminal, used only to size the prefix cheat-sheet popup. escapeDelay
 // is how long a lone Esc waits for the rest of a sequence before being sent.
-func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.Conn, km keymap, escapeDelay time.Duration, overlay *atomic.Bool) error {
+func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.Conn, km keymap, pal *theme.Palette, escapeDelay time.Duration, overlay *atomic.Bool) error {
 	prefix := km.prefix
 	for {
 		b, err := br.ReadByte()
@@ -347,7 +350,7 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 			// user already typed it (a buffered byte) — then skip the flash.
 			hide, shown := func() {}, false
 			if br.Buffered() == 0 {
-				hide, shown = showWhichKey(out, term, km), true
+				hide, shown = showWhichKey(out, term, km, pal), true
 			}
 			cmd, err := br.ReadByte()
 			if err != nil {
@@ -355,17 +358,23 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 				return err
 			}
 			hide()
-			// Repaint over where the panel was. The ':' prompt and the Ctrl-b m
-			// popup own the screen themselves and refresh on their own after.
-			if shown && cmd != ':' && cmd != 'm' {
+			// Repaint over where the panel was. The Ctrl-b m popup owns the
+			// screen itself and refreshes on its own after. A prompt waits for
+			// this repaint to land before drawing on the bottom row.
+			settle := time.Duration(0)
+			if shown && cmd != 'm' {
 				pc.Write(protocol.Message{Type: protocol.TypeRefresh})
+				settle = promptSettle
 			}
+			quick, isQuick := quickPrompts[cmd]
 			switch {
 			case cmd == ':':
-				commandPrompt(br, out, pc)
+				commandPrompt(br, out, pc, linePrompt, settle)
 			case cmd == prefix:
 				// prefix twice: send one literal prefix byte to the pane.
 				pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{prefix}})
+			case isQuick && km.binds[string(rune(cmd))] == "":
+				commandPrompt(br, out, pc, quick, settle)
 			case cmd == 0x1b:
 				if line, ok := arrowCommand(br); ok {
 					pc.Write(protocol.Message{Type: protocol.TypeExec, Name: line})
@@ -375,7 +384,7 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 				// sessions. Any key dismisses it. overlay keeps server frames
 				// from painting over it while it is up.
 				overlay.Store(true)
-				hideHelp := showSessionHelp(out, term)
+				hideHelp := showSessionHelp(out, term, pal)
 				_, _ = br.ReadByte()
 				hideHelp()
 				overlay.Store(false)
@@ -497,10 +506,49 @@ func parseSGRMouse(body []byte) (protocol.Message, bool) {
 	}, true
 }
 
-// commandPrompt runs the ':' line editor locally, drawing on the bottom row.
-func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn) {
+// promptSpec is one flavour of the bottom-row line editor: the label drawn in
+// front of what the user types, and how the typed text becomes the command
+// line sent to the server. An empty command line sends nothing.
+type promptSpec struct {
+	label string
+	build func(input string) string
+}
+
+// linePrompt is the ':' command prompt: what is typed is the command line.
+var linePrompt = promptSpec{label: ":", build: func(s string) string { return s }}
+
+// namePrompt asks for a name and runs "cmd NAME"; a blank answer does nothing.
+func namePrompt(label, cmd string) promptSpec {
+	return promptSpec{label: label, build: func(s string) string {
+		if name := strings.TrimSpace(s); name != "" {
+			return cmd + " " + name
+		}
+		return ""
+	}}
+}
+
+// quickPrompts are the prefix keys that open the prompt already aimed at one
+// command, as in tmux: the user types only the argument. A config `bind` of the
+// same key wins over these.
+var quickPrompts = map[byte]promptSpec{
+	',': namePrompt("rename window: ", "rename-window"),
+	'$': namePrompt("rename session: ", "rename-session"),
+}
+
+// promptSettle is how long a prompt opened right after the which-key panel
+// waits before drawing, so the Refresh that repaints behind the panel does not
+// paint over it.
+const promptSettle = 60 * time.Millisecond
+
+// commandPrompt runs a line editor locally, drawing spec's label and the typed
+// text on the bottom row. Enter sends spec.build of the text (if non-empty),
+// Esc cancels. settle delays the first draw (see promptSettle).
+func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec promptSpec, settle time.Duration) {
 	var buf []byte
-	draw := func() { out.WriteString("\x1b[?25h\x1b[999;1H\x1b[2K:" + string(buf)) }
+	draw := func() { out.WriteString("\x1b[?25h\x1b[999;1H\x1b[2K" + spec.label + string(buf)) }
+	if settle > 0 {
+		time.Sleep(settle)
+	}
 	draw()
 	for {
 		b, err := br.ReadByte()
@@ -509,8 +557,8 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn) {
 		}
 		switch b {
 		case '\r', '\n':
-			if len(buf) > 0 {
-				pc.Write(protocol.Message{Type: protocol.TypeExec, Name: string(buf)})
+			if line := spec.build(string(buf)); line != "" {
+				pc.Write(protocol.Message{Type: protocol.TypeExec, Name: line})
 			}
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
 			return

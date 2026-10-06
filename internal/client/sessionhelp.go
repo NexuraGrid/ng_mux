@@ -1,12 +1,12 @@
 package client
 
 import (
-	"fmt"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/MauricioJC3/ng_mux/internal/termio"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
+	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
 // sessionHelpRow is one line of the Ctrl-b m panel: a short label and the exact
@@ -22,7 +22,7 @@ var sessionHelp = []sessionHelpRow{
 	{"attach", "ngmux attach -t NAME"},
 	{"list", "ngmux ls"},
 	{"switch", "Ctrl-b (   Ctrl-b )"},
-	{"rename", "Ctrl-b : rename-session NAME"},
+	{"rename", "Ctrl-b $   (asks for a name)"},
 	{"detach", "Ctrl-b d   (keeps it running)"},
 	{"kill", "ngmux kill-session -t NAME"},
 }
@@ -33,18 +33,18 @@ const sessionHelpTitle = "sessions"
 // returns a function that erases it. Like showWhichKey it is a transient
 // overlay: a concurrent server frame may repaint behind it, and the caller
 // sends a Refresh once it is dismissed.
-func showSessionHelp(out *lockedWriter, term *os.File) func() {
+func showSessionHelp(out *lockedWriter, term *os.File, pal *theme.Palette) func() {
 	size, err := termio.GetSize(term)
 	if err != nil || size.Cols < whichKeyMinCols || size.Rows < whichKeyMinRows {
 		return func() {}
 	}
 
-	box := sessionHelpBox(sessionHelp, size.Cols-2, size.Rows-2)
-	if len(box) == 0 {
+	pop, ok := sessionHelpPopup(sessionHelp, size.Cols-2, size.Rows-2)
+	if !ok {
 		return func() {}
 	}
-	boxW := utf8.RuneCountInString(box[0])
-	boxH := len(box)
+	boxW := pop.width()
+	boxH := pop.height()
 
 	startRow := (size.Rows-boxH)/2 + 1
 	if startRow < 1 {
@@ -55,23 +55,14 @@ func showSessionHelp(out *lockedWriter, term *os.File) func() {
 		startCol = 1
 	}
 
-	const (
-		panelOn  = "\x1b[0m\x1b[48;5;236m\x1b[38;5;253m"
-		panelOff = "\x1b[0m"
-	)
 	var b strings.Builder
 	b.WriteString("\x1b[?25l") // hide the cursor while the panel is up
-	for i, line := range box {
-		fmt.Fprintf(&b, "\x1b[%d;%dH%s%s%s", startRow+i, startCol, panelOn, line, panelOff)
-	}
+	pop.paint(&b, startRow, startCol, pal)
 	out.WriteString(b.String())
 
 	return func() {
 		var c strings.Builder
-		blank := strings.Repeat(" ", boxW)
-		for i := 0; i < boxH; i++ {
-			fmt.Fprintf(&c, "\x1b[%d;%dH%s", startRow+i, startCol, blank)
-		}
+		pop.erase(&c, startRow, startCol)
 		c.WriteString("\x1b[?25h")
 		out.WriteString(c.String())
 	}
@@ -79,20 +70,29 @@ func showSessionHelp(out *lockedWriter, term *os.File) func() {
 
 // sessionHelpBox renders the cheat-sheet as a bordered panel, one "label
 // command" row per entry, no wider than maxWidth and no taller than maxRows. It
-// returns equal-width plain-text lines (no ANSI); the caller adds colour and
-// position. It returns nil when the panel cannot fit.
+// returns equal-width plain-text lines (no ANSI), or nil when the panel cannot
+// fit.
 func sessionHelpBox(rows []sessionHelpRow, maxWidth, maxRows int) []string {
-	if maxWidth < 20 || maxRows < len(rows)+2 || len(rows) == 0 {
+	pop, ok := sessionHelpPopup(rows, maxWidth, maxRows)
+	if !ok {
 		return nil
+	}
+	return pop.lines()
+}
+
+// sessionHelpPopup is sessionHelpBox's layout as a popup, ready to paint.
+func sessionHelpPopup(rows []sessionHelpRow, maxWidth, maxRows int) (popup, bool) {
+	if maxWidth < 20 || maxRows < len(rows)+2 || len(rows) == 0 {
+		return popup{}, false
 	}
 
 	labelW := 0
 	cmdW := 0
 	for _, r := range rows {
-		if n := utf8.RuneCountInString(r.label); n > labelW {
+		if n := vterm.StringWidth(r.label); n > labelW {
 			labelW = n
 		}
-		if n := utf8.RuneCountInString(r.cmd); n > cmdW {
+		if n := vterm.StringWidth(r.cmd); n > cmdW {
 			cmdW = n
 		}
 	}
@@ -103,24 +103,16 @@ func sessionHelpBox(rows []sessionHelpRow, maxWidth, maxRows int) []string {
 		cmdW = width - 2 - labelW - 2 - 2
 	}
 	if cmdW < 8 {
-		return nil
-	}
-	inner := width - 2
-
-	center := func(s string) string {
-		if utf8.RuneCountInString(s) > inner {
-			s = string([]rune(s)[:inner])
-		}
-		pad := inner - utf8.RuneCountInString(s)
-		l := pad / 2
-		return strings.Repeat("─", l) + s + strings.Repeat("─", pad-l)
+		return popup{}, false
 	}
 
-	out := make([]string, 0, len(rows)+2)
-	out = append(out, "┌"+center(" "+sessionHelpTitle+" ")+"┐")
+	body := make([]popupRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, "│ "+fitRunes(r.label, labelW)+"  "+fitRunes(r.cmd, cmdW)+" │")
+		body = append(body, popupRow{key: r.label, text: r.cmd})
 	}
-	out = append(out, "└"+center(" press any key ")+"┘")
-	return out
+	return popup{
+		title:  sessionHelpTitle,
+		footer: "press any key",
+		cols:   []popupCol{{rows: body, keyW: labelW, textW: cmdW}},
+	}, true
 }
