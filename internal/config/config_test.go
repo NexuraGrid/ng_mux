@@ -351,3 +351,48 @@ func TestPaneTitlesDefaultOnAndCanBeDisabled(t *testing.T) {
 		t.Errorf("a bad pane-titles value should warn and keep the default, got %v / %v", bad.PaneTitles, bad.Warnings)
 	}
 }
+
+func TestResolvePath(t *testing.T) {
+	env := func(vars map[string]string) func(string) string {
+		return func(k string) string { return vars[k] }
+	}
+	existing := func(paths ...string) func(string) bool {
+		return func(p string) bool {
+			for _, e := range paths {
+				if p == e {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	macDir := func() (string, error) { return "/Users/u/Library/Application Support", nil }
+	winDir := func() (string, error) { return `C:\Users\u\AppData\Roaming`, nil }
+	appSupport := filepath.Join("/Users/u/Library/Application Support", "ngmux", "ngmux.conf")
+	dotConfig := filepath.Join("/Users/u", ".config", "ngmux", "ngmux.conf")
+	xdg := filepath.Join("/xdg", "ngmux", "ngmux.conf")
+
+	cases := []struct {
+		name   string
+		goos   string
+		vars   map[string]string
+		exists func(string) bool
+		dir    func() (string, error)
+		want   string
+	}{
+		{"NGMUX_CONFIG wins", "darwin", map[string]string{"NGMUX_CONFIG": "/x.conf", "HOME": "/Users/u"}, existing(dotConfig), macDir, "/x.conf"},
+		{"mac ~/.config when it exists", "darwin", map[string]string{"HOME": "/Users/u"}, existing(dotConfig, appSupport), macDir, dotConfig},
+		{"XDG_CONFIG_HOME before ~/.config", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "/xdg"}, existing(dotConfig, xdg), macDir, xdg},
+		{"missing XDG file falls through", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "/xdg"}, existing(dotConfig), macDir, dotConfig},
+		{"relative XDG_CONFIG_HOME ignored", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "xdg"}, existing(filepath.Join("xdg", "ngmux", "ngmux.conf")), macDir, appSupport},
+		{"mac legacy Application Support", "darwin", map[string]string{"HOME": "/Users/u"}, existing(appSupport), macDir, appSupport},
+		{"windows ignores XDG", "windows", map[string]string{"XDG_CONFIG_HOME": "/xdg", "HOME": "/Users/u"}, existing(xdg, dotConfig), winDir, filepath.Join(`C:\Users\u\AppData\Roaming`, "ngmux", "ngmux.conf")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolvePath(c.goos, env(c.vars), c.exists, c.dir); got != c.want {
+				t.Errorf("resolvePath = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
