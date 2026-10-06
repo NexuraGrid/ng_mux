@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -370,7 +371,13 @@ func TestResolvePath(t *testing.T) {
 	winDir := func() (string, error) { return `C:\Users\u\AppData\Roaming`, nil }
 	appSupport := filepath.Join("/Users/u/Library/Application Support", "ngmux", "ngmux.conf")
 	dotConfig := filepath.Join("/Users/u", ".config", "ngmux", "ngmux.conf")
-	xdg := filepath.Join("/xdg", "ngmux", "ngmux.conf")
+	// XDG_CONFIG_HOME must be absolute on the host running the test, which
+	// on Windows needs a drive letter.
+	xdgRoot := "/xdg"
+	if runtime.GOOS == "windows" {
+		xdgRoot = `C:\xdg`
+	}
+	xdg := filepath.Join(xdgRoot, "ngmux", "ngmux.conf")
 
 	cases := []struct {
 		name   string
@@ -382,11 +389,11 @@ func TestResolvePath(t *testing.T) {
 	}{
 		{"NGMUX_CONFIG wins", "darwin", map[string]string{"NGMUX_CONFIG": "/x.conf", "HOME": "/Users/u"}, existing(dotConfig), macDir, "/x.conf"},
 		{"mac ~/.config when it exists", "darwin", map[string]string{"HOME": "/Users/u"}, existing(dotConfig, appSupport), macDir, dotConfig},
-		{"XDG_CONFIG_HOME before ~/.config", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "/xdg"}, existing(dotConfig, xdg), macDir, xdg},
-		{"missing XDG file falls through", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "/xdg"}, existing(dotConfig), macDir, dotConfig},
+		{"XDG_CONFIG_HOME before ~/.config", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": xdgRoot}, existing(dotConfig, xdg), macDir, xdg},
+		{"missing XDG file falls through", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": xdgRoot}, existing(dotConfig), macDir, dotConfig},
 		{"relative XDG_CONFIG_HOME ignored", "darwin", map[string]string{"HOME": "/Users/u", "XDG_CONFIG_HOME": "xdg"}, existing(filepath.Join("xdg", "ngmux", "ngmux.conf")), macDir, appSupport},
 		{"mac legacy Application Support", "darwin", map[string]string{"HOME": "/Users/u"}, existing(appSupport), macDir, appSupport},
-		{"windows ignores XDG", "windows", map[string]string{"XDG_CONFIG_HOME": "/xdg", "HOME": "/Users/u"}, existing(xdg, dotConfig), winDir, filepath.Join(`C:\Users\u\AppData\Roaming`, "ngmux", "ngmux.conf")},
+		{"windows ignores XDG", "windows", map[string]string{"XDG_CONFIG_HOME": xdgRoot, "HOME": "/Users/u"}, existing(xdg, dotConfig), winDir, filepath.Join(`C:\Users\u\AppData\Roaming`, "ngmux", "ngmux.conf")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
