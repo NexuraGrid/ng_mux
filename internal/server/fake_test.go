@@ -107,6 +107,14 @@ type fakeScreen struct {
 	writeErr      error // when set, the next Write returns this error and clears it
 	snapPanic     bool  // when set, the next SnapshotInto panics and clears it
 	closed        bool  // set by Close, so tests can assert a pane closed its screen
+	title         string
+}
+
+// setTitle simulates the program setting its window title (OSC 0/2).
+func (s *fakeScreen) setTitle(title string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.title = title
 }
 
 func newFakeScreen(cols, rows int) *fakeScreen {
@@ -192,6 +200,7 @@ func (s *fakeScreen) SnapshotInto(dst *vterm.Snapshot) {
 		dst.Cells = dst.Cells[:need]
 	}
 	dst.Cols, dst.Rows = s.cols, s.rows
+	dst.Title = s.title
 }
 
 func (s *fakeScreen) ScrollbackView(offset, rows int) vterm.Snapshot {
@@ -333,15 +342,22 @@ func (ff *fakeFleet) byID(id layout.PaneID) *fakePane {
 // newTestServer builds a Server backed by fake panes, with no listener.
 func newTestServer(t testing.TB) (*Server, *fakeFleet) {
 	t.Helper()
+	return newTestServerWith(t, func(*sessionOpts) {})
+}
+
+// newTestServerWith is newTestServer with a hook to adjust the session options
+// (pane titles, a theme, ...) before the server is built.
+func newTestServerWith(t testing.TB, adjust func(*sessionOpts)) (*Server, *fakeFleet) {
+	t.Helper()
 	ff := &fakeFleet{}
-	srv := newServer(ipc.Endpoint{Name: "test"}, 80, 24, nil, sessionOpts{
+	opts := sessionOpts{
 		historyLimit: 100,
 		defaultShell: "/bin/fakesh",
-		statusFG:     0,
-		statusBG:     7,
 		setClipboard: true,
 		newPane:      ff.factory(),
-	})
+	}
+	adjust(&opts)
+	srv := newServer(ipc.Endpoint{Name: "test"}, 80, 24, nil, opts)
 	t.Cleanup(srv.shutdownAll)
 	return srv, ff
 }

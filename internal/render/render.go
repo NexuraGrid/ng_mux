@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MauricioJC3/ng_mux/internal/layout"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
 	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
@@ -110,12 +111,18 @@ type PaneView struct {
 	Snap   *vterm.Snapshot
 	Active bool
 
-	// Overlay, when non-empty, is printed in reverse video at the pane's
-	// top-right corner (used for the "-- COPY 12/340 --" indicator).
+	// Overlay, when non-empty, is printed as a pill at the pane's top-right
+	// corner (used for the " COPY 12/340 " indicator).
 	Overlay string
-	// Badge, when non-empty, is printed in reverse video centred in the pane
-	// (used by display-panes to show each pane's index).
+	// Badge, when non-empty, is printed as a pill centred in the pane (used by
+	// display-panes to show each pane's index).
 	Badge string
+	// ShowTitle draws a title line on the row just above Rect (which the
+	// caller keeps free of panes: the top row of the window, or the divider
+	// above the pane) reading "─ <TitleNum> <Title> ────".
+	ShowTitle bool
+	TitleNum  int
+	Title     string
 	// Sel, when non-nil, highlights an inclusive cell range in the pane's own
 	// coordinates (used by copy-mode selection).
 	Sel *Selection
@@ -140,18 +147,21 @@ func (s Selection) contains(x, y, cols int) bool {
 	return p >= a && p <= b
 }
 
-// StatusStyle holds the status bar's palette (xterm colour indices).
+// StatusStyle holds the status bar's base colours (xterm colour indices). It
+// overrides the StatusFG/StatusBG of the dark theme for callers that do not
+// pass a whole palette.
 type StatusStyle struct {
 	FG, BG int
 }
 
-// DefaultStatusStyle is black on light-grey.
+// DefaultStatusStyle is the dark theme's bar: light-grey text on black.
 var DefaultStatusStyle = StatusStyle{FG: 0, BG: 7}
 
 // StatusSegment is a run of status-bar text with its own emphasis. FG and BG
-// are xterm colour indices; -1 means "inherit the bar's default style" (which
-// is what a plain-string status uses for every cell). Attr adds attribute bits
-// (bold, underline, …) on top of the bar's reverse-video base.
+// are xterm colour indices (or theme.Default); -1 means "inherit the bar's
+// default style" (which is what a plain-string status uses for every cell).
+// Attr adds attribute bits (bold, underline, …) on top of the bar's
+// reverse-video base.
 type StatusSegment struct {
 	Text   string
 	FG, BG int
@@ -159,7 +169,10 @@ type StatusSegment struct {
 }
 
 // InheritColour, used for StatusSegment.FG/BG, keeps the bar's default colour.
-const InheritColour = -1
+const InheritColour = theme.Inherit
+
+// darkPalette is copied, never modified, by the StatusStyle entry points.
+var darkPalette = theme.Dark()
 
 // Compose builds a fresh frame of size cols x rows. The last row is the status
 // bar; panes are laid out in rows [0, rows-1). status is the text shown in the
@@ -179,8 +192,20 @@ func ComposeInto(dst *Frame, cols, rows int, panes []PaneView, status string, st
 
 // ComposeStyledInto is ComposeInto with a segmented status bar: each segment
 // carries its own emphasis (see StatusSegment). Segments are laid out left to
-// right and the bar is padded to full width with the default style.
+// right and the bar is padded to full width with the default style. Chrome
+// other than the bar's base colours uses the dark theme.
 func ComposeStyledInto(dst *Frame, cols, rows int, panes []PaneView, status []StatusSegment, style StatusStyle) *Frame {
+	if style.FG == darkPalette.StatusFG && style.BG == darkPalette.StatusBG {
+		return ComposeThemedInto(dst, cols, rows, panes, status, &darkPalette)
+	}
+	pal := darkPalette
+	pal.StatusFG, pal.StatusBG = style.FG, style.BG
+	return ComposeThemedInto(dst, cols, rows, panes, status, &pal)
+}
+
+// ComposeThemedInto is ComposeStyledInto with every piece of chrome (bar,
+// borders, pane titles, badges, overlay) drawn from pal.
+func ComposeThemedInto(dst *Frame, cols, rows int, panes []PaneView, status []StatusSegment, pal *theme.Palette) *Frame {
 	f := dst
 	if f == nil {
 		f = &Frame{}
@@ -224,26 +249,32 @@ func ComposeStyledInto(dst *Frame, cols, rows int, panes []PaneView, status []St
 			}
 		}
 		if p.Overlay != "" {
-			ox := r.X + r.W - len([]rune(p.Overlay))
+			ox := r.X + r.W - vterm.StringWidth(p.Overlay)
 			if ox < r.X {
 				ox = r.X
 			}
-			for i, ch := range p.Overlay {
-				f.set(ox+i, r.Y, Cell{Ch: ch, FG: 0, BG: 3, Attr: vterm.AttrReverse})
-			}
+			putText(f, ox, r.Y, r.X+r.W, p.Overlay, pal.Overlay)
 		}
 		if p.Badge != "" {
-			runes := []rune(p.Badge)
-			bx := r.X + (r.W-len(runes))/2
-			by := r.Y + r.H/2
-			for i, ch := range runes {
-				f.set(bx+i, by, Cell{Ch: ch, FG: 0, BG: 6, Attr: vterm.AttrReverse | vterm.AttrBold})
+			bx := r.X + (r.W-vterm.StringWidth(p.Badge))/2
+			if bx < r.X {
+				bx = r.X
 			}
+			st := pal.Badge
+			if p.Active {
+				st = pal.BadgeActive
+			}
+			putText(f, bx, r.Y+r.H/2, r.X+r.W, p.Badge, st)
 		}
 	}
 
-	drawBorders(f, covered, cols, contentRows, active)
-	drawStatusSegments(f, status, style)
+	drawBorders(f, covered, cols, contentRows, active, pal)
+	for i := range panes {
+		if panes[i].ShowTitle {
+			drawTitle(f, &panes[i], pal)
+		}
+	}
+	drawStatusSegments(f, status, pal.StatusFG, pal.StatusBG)
 
 	switch {
 	case active != nil && active.CopyCur != nil:
@@ -258,14 +289,119 @@ func ComposeStyledInto(dst *Frame, cols, rows int, panes []PaneView, status []St
 	return f
 }
 
-// borderColor is a dim grey for inactive dividers; the active pane's dividers
-// are drawn in green so the focused pane is obvious.
-const (
-	borderDim    = 8 // xterm bright-black
-	borderActive = 2 // xterm green
-)
+// colours resolves a chrome Style's FG/BG to cell colours. Inherit only means
+// something on the status bar; anywhere else it falls back to the default.
+func colours(st theme.Style) (fg, bg uint32) {
+	fg, bg = vterm.ColorDefault, vterm.ColorDefault
+	if st.FG >= 0 {
+		fg = uint32(st.FG)
+	}
+	if st.BG >= 0 {
+		bg = uint32(st.BG)
+	}
+	return fg, bg
+}
 
-func drawBorders(f *Frame, covered []bool, cols, contentRows int, active *PaneView) {
+// putText draws s in style st starting at column x of row y, never at or past
+// column limit, and returns the column after the last cell drawn. A
+// double-width rune that would straddle limit is not drawn.
+func putText(f *Frame, x, y, limit int, s string, st theme.Style) int {
+	for _, r := range s {
+		nx := putRune(f, x, y, limit, r, st)
+		if nx == x {
+			break
+		}
+		x = nx
+	}
+	return x
+}
+
+// putRune is putText for a single rune; it returns x unchanged when the rune
+// does not fit before limit.
+func putRune(f *Frame, x, y, limit int, r rune, st theme.Style) int {
+	w := vterm.RuneWidth(r)
+	if w < 1 {
+		w = 1
+	}
+	if x+w > limit {
+		return x
+	}
+	fg, bg := colours(st)
+	f.set(x, y, Cell{Ch: r, FG: fg, BG: bg, Attr: st.Attr, Width: uint8(w)})
+	if w == 2 {
+		f.set(x+1, y, Cell{Ch: 0, FG: fg, BG: bg, Attr: st.Attr, Width: 0})
+	}
+	return x + w
+}
+
+// drawTitle writes a pane's title pill onto the border line just above it:
+//
+//	─ 1 bash ──────
+//
+// The line itself is drawn by drawBorders (the row is uncovered, so it is a
+// divider); this only overwrites the run after its first cell with
+// " <num> <title> ", cutting the title with "…" when the pane is too narrow.
+// It allocates nothing.
+func drawTitle(f *Frame, p *PaneView, pal *theme.Palette) {
+	r := p.Rect
+	y := r.Y - 1
+	if y < 0 || r.W < 4 {
+		return
+	}
+	st := pal.Title
+	if p.Active {
+		st = pal.TitleActive
+	}
+	x := r.X + 1
+	limit := r.X + r.W - 1 // keep a line cell at the right end
+
+	var digits [20]byte
+	num := strconv.AppendInt(digits[:0], int64(p.TitleNum), 10)
+	if 1+len(num)+1 > limit-x {
+		return
+	}
+	x = putRune(f, x, y, limit, ' ', st)
+	for _, d := range num {
+		x = putRune(f, x, y, limit, rune(d), st)
+	}
+	title := p.Title
+	x = putRune(f, x, y, limit, ' ', st)
+	if title == "" {
+		return
+	}
+	// " " after the title, so the room for the title itself is one less.
+	room := limit - x - 1
+	if room < 1 {
+		return
+	}
+	if vterm.StringWidth(title) <= room {
+		x = putText(f, x, y, limit, title, st)
+	} else {
+		x = putText(f, x, y, x+room-1, title, st)
+		x = putRune(f, x, y, limit, '…', st)
+	}
+	putRune(f, x, y, limit, ' ', st)
+}
+
+// borderGlyphs maps which neighbours a divider cell connects to (bit 0 up,
+// 1 down, 2 left, 3 right) to its box-drawing rune. Every glyph is in CP437,
+// so they render on old consoles and raster fonts too. A cell that connects
+// along one side only (a divider touching the screen edge) is a plain line.
+var borderGlyphs = [16]rune{
+	0b0000: ' ',
+	0b0001: '│', 0b0010: '│', 0b0011: '│',
+	0b0100: '─', 0b1000: '─', 0b1100: '─',
+	0b0101: '┘', 0b0110: '┐', 0b1001: '└', 0b1010: '┌',
+	0b0111: '┤', 0b1011: '├', 0b1101: '┴', 0b1110: '┬',
+	0b1111: '┼',
+}
+
+// drawBorders draws every divider cell. Those around the focused pane use
+// pal.BorderActive (green in the dark theme, bold in mono) so the focus is
+// obvious; the rest use the dim pal.BorderDim.
+func drawBorders(f *Frame, covered []bool, cols, contentRows int, active *PaneView, pal *theme.Palette) {
+	dimFG, _ := colours(pal.BorderDim)
+	activeFG, _ := colours(pal.BorderActive)
 	activeAdj := func(x, y int) bool {
 		if active == nil {
 			return false
@@ -273,47 +409,72 @@ func drawBorders(f *Frame, covered []bool, cols, contentRows int, active *PaneVi
 		r := active.Rect
 		return (x >= r.X-1 && x <= r.X+r.W && y >= r.Y-1 && y <= r.Y+r.H)
 	}
+	cov := func(x, y int) bool {
+		return x >= 0 && y >= 0 && x < cols && y < contentRows && covered[y*cols+x]
+	}
+	// A divider cell is an uncovered cell touching a pane, diagonals included:
+	// the junction where dividers cross touches panes only at its corners.
+	divider := func(x, y int) bool {
+		if x < 0 || y < 0 || x >= cols || y >= contentRows || covered[y*cols+x] {
+			return false
+		}
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				if cov(x+dx, y+dy) {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	for y := 0; y < contentRows; y++ {
 		for x := 0; x < cols; x++ {
-			if covered[y*cols+x] {
+			if !divider(x, y) {
 				continue
 			}
-			left := x > 0 && covered[y*cols+x-1]
-			right := x < cols-1 && covered[y*cols+x+1]
-			up := y > 0 && covered[(y-1)*cols+x]
-			down := y < contentRows-1 && covered[(y+1)*cols+x]
-
-			var ch rune = ' '
-			switch {
-			case (up || down) && (left || right):
-				ch = '┼'
-			case left || right:
-				ch = '│'
-			case up || down:
-				ch = '─'
+			var mask int
+			if divider(x, y-1) {
+				mask |= 1
 			}
+			if divider(x, y+1) {
+				mask |= 2
+			}
+			if divider(x-1, y) {
+				mask |= 4
+			}
+			if divider(x+1, y) {
+				mask |= 8
+			}
+			ch := borderGlyphs[mask]
 			if ch == ' ' {
-				continue
+				// An isolated cell: fall back to the line its panes imply.
+				if cov(x-1, y) || cov(x+1, y) {
+					ch = '│'
+				} else {
+					ch = '─'
+				}
 			}
-			color := uint32(borderDim)
+			c := Cell{Ch: ch, FG: dimFG, BG: vterm.ColorDefault, Attr: pal.BorderDim.Attr, Width: 1}
 			if activeAdj(x, y) {
-				color = borderActive
+				c.FG, c.Attr = activeFG, pal.BorderActive.Attr
 			}
-			f.set(x, y, Cell{Ch: ch, FG: color, BG: vterm.ColorDefault})
+			f.set(x, y, c)
 		}
 	}
 }
 
 // drawStatusSegments paints the bar's bottom row from left to right. Every cell
 // keeps the bar's reverse-video base; a segment that overrides FG or BG opts out
-// of reverse so its colour reads literally. Any tail past the last segment is
-// filled with the default style.
-func drawStatusSegments(f *Frame, segs []StatusSegment, style StatusStyle) {
+// of reverse so its colour reads literally, and the side it leaves inherited
+// takes the colour the bar visibly shows there (reverse swaps them), so a
+// coloured word sits on the same background as the rest of the bar. Any tail
+// past the last segment is filled with the default style.
+func drawStatusSegments(f *Frame, segs []StatusSegment, statusFG, statusBG int) {
 	y := f.Rows - 1
 	if y < 0 {
 		return
 	}
-	defFG, defBG := uint32(style.FG), uint32(style.BG)
+	defFG, defBG := uint32(statusFG), uint32(statusBG)
 	x := 0
 	put := func(c Cell) {
 		if x >= f.Cols {
@@ -336,11 +497,16 @@ func drawStatusSegments(f *Frame, segs []StatusSegment, style StatusStyle) {
 	for _, seg := range segs {
 		fg, bg := defFG, defBG
 		attr := uint16(vterm.AttrReverse)
-		if seg.FG != InheritColour {
-			fg, attr = uint32(seg.FG), 0
-		}
-		if seg.BG != InheritColour {
-			bg, attr = uint32(seg.BG), 0
+		if seg.FG != InheritColour || seg.BG != InheritColour {
+			// Without reverse, the visible text colour is defBG and the
+			// visible background is defFG.
+			fg, bg, attr = defBG, defFG, 0
+			if seg.FG != InheritColour {
+				fg = uint32(seg.FG)
+			}
+			if seg.BG != InheritColour {
+				bg = uint32(seg.BG)
+			}
 		}
 		attr |= seg.Attr
 		for _, r := range seg.Text {

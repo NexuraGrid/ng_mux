@@ -37,7 +37,7 @@ Working now:
   and `Ctrl-b :` opens the same commands as an in-terminal prompt
 - **preset layouts**: `select-layout even-horizontal | even-vertical | tiled |
   main-vertical | main-horizontal`
-- **rename** windows and sessions
+- **rename** windows and sessions (`Ctrl-b ,` / `Ctrl-b $`)
 - **mouse** (on by default; `set mouse off` to disable): click a pane to focus
   it, drag a border to resize, wheel to scroll history, click a window name or
   the `[+]` button in the status bar
@@ -134,8 +134,8 @@ ngmux kill-session -t logs   stop one session and its shells
 ```
 
 While attached: `Ctrl-b (` / `Ctrl-b )` move between sessions, `Ctrl-b :
-new-session -s NAME` creates one without leaving, `Ctrl-b : rename-session NAME`
-renames the current one, `Ctrl-b d` detaches, and `Ctrl-b m` pops up this list.
+new-session -s NAME` creates one without leaving, `Ctrl-b $` asks for a new name
+for the current one, `Ctrl-b d` detaches, and `Ctrl-b m` pops up this list.
 An unnamed session gets the next free number (`0`, `1`, `2`, …), like tmux.
 
 ### Key bindings
@@ -156,9 +156,11 @@ Prefix is **Ctrl-b** (same as tmux).
 | `Ctrl-b !`      | break focused pane into its own window |
 | `Ctrl-b x`      | kill focused pane          |
 | `Ctrl-b c`      | new window                 |
+| `Ctrl-b ,`      | rename window (asks for the name) |
 | `Ctrl-b n` / `p`| next / previous window     |
 | `Ctrl-b 0`–`9`  | select window by index     |
 | `Ctrl-b &`      | kill window                |
+| `Ctrl-b $`      | rename session (asks for the name) |
 | `Ctrl-b (` / `)`| previous / next session    |
 | `Ctrl-b m`      | session cheat-sheet (new / attach / list) |
 | `Ctrl-b [`      | enter copy-mode (scrollback) |
@@ -187,6 +189,8 @@ set escape-time 25
 set status-fg 0
 set status-bg 4
 set set-clipboard on
+set theme dark
+set pane-titles on
 bind s split-vertical
 bind v split-horizontal
 ```
@@ -196,12 +200,66 @@ escape sequence before it is sent on its own (default 25). Raise it on a slow
 link if arrow keys misfire; lower it to `0` if an app inside ngmux feels
 sluggish to react to `Esc`.
 
+`theme` picks the colours of everything ngmux draws itself (status bar, pane
+borders and titles, popups): `dark` (default), `light` for light terminal
+backgrounds, or `mono` for no colour at all (bold, underline and reverse video
+only). All three use just the 8 basic colours, so they work on old terminals.
+See [Colours](#colours) to change single colours on top of the theme.
+
+`pane-titles` (default `on`) draws a title line above each pane of a split
+window: the pane's number and the title its program set (or the window name).
+Turn it `off` to give that row back to the panes.
+
 `set-clipboard` (default `on`) also copies a copy-mode yank to the system
 clipboard using an OSC 52 escape, so `Ctrl-b ]` is not the only way to get it
 back. Turn it `off` if your terminal does not support OSC 52 or you would
 rather ngmux never touch the clipboard.
 
 Unknown lines are logged and skipped, never fatal.
+
+### Colours
+
+Colours live in the same config file: `$NGMUX_CONFIG` if set, otherwise
+`ngmux/ngmux.conf` under your user config directory (`~/.config` on Linux,
+`~/Library/Application Support` on macOS, `%APPDATA%` on Windows). The file is
+read when the server starts, so restart the server (`ngmux kill-server`, which ends every session) to apply
+a change.
+
+`set theme dark|light|mono` picks the base look. Each key below then overrides
+one colour of that theme, whichever theme it is; bold, underline and the rest
+of the theme stay as they are.
+
+| Key | Colours |
+|-----|---------|
+| `status-fg`, `status-bg` | the status bar's text and background |
+| `session-fg`, `session-bg` | the session-name pill |
+| `tab-fg`, `tab-bg` | other windows' tabs (default: the bar's colours) |
+| `tab-active-fg`, `tab-active-bg` | the current window's tab |
+| `tab-alert-fg`, `tab-alert-bg` | a hidden window with new output, and the `«` / `»` arrows pointing at one |
+| `mode-fg`, `mode-bg` | the `ZOOM` / `COPY` pills |
+| `border-fg` | pane dividers |
+| `border-active-fg` | the dividers around the focused pane |
+| `pane-title-active-fg`, `pane-title-active-bg` | the focused pane's title pill |
+
+A value is a colour number `0`..`255`, a name (`black`, `red`, `green`,
+`yellow`, `blue`, `magenta`, `cyan`, `white`), `bright-` plus a name for
+8..15 (`bright-black` … `bright-white`), or `default` for the terminal's own
+colour. Names are case-insensitive. A bad value is reported as a warning and
+that line is ignored.
+
+```
+set theme dark
+set status-bg black
+set status-fg white
+set session-bg magenta
+set tab-active-bg bright-blue
+set tab-active-fg black
+set border-active-fg 214
+```
+
+`status-fg` is the bar's text and `status-bg` its background. Before this
+release they were the other way round (`status-bg 4` turned the text blue);
+swap the two values in an older config to keep its look.
 
 ### Troubleshooting
 

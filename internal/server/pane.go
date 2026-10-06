@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/MauricioJC3/ng_mux/internal/layout"
 	"github.com/MauricioJC3/ng_mux/internal/ptyx"
@@ -62,6 +63,12 @@ type pane struct {
 	vt   screen
 	copy *copyState
 
+	// output is set by pump whenever the pty produces bytes. The status bar
+	// reads it to flag activity in windows that are not on screen, and clears
+	// it while the pane's window is the one being shown. Unlike vt.Dirty it is
+	// not tripped by a resize, so re-attaching does not light up every tab.
+	output atomic.Bool
+
 	// logf reports unusual daemon-side conditions tied to this pane (a
 	// recovered emulator panic, a pump goroutine that itself panicked) so
 	// they are visible without crashing anything to surface them. Set by the
@@ -114,6 +121,7 @@ func (p *pane) pump(onExit func(*pane)) {
 		n, err := p.pt.Read(buf)
 		if n > 0 {
 			p.feed(buf[:n])
+			p.output.Store(true)
 		}
 		if err != nil {
 			break

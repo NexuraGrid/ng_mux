@@ -89,9 +89,9 @@ func Run(ep ipc.Endpoint, initCols, initRows int, logger *log.Logger) error {
 	srv := newServer(ep, initCols, initRows, logger, sessionOpts{
 		historyLimit: cfg.HistoryLimit,
 		defaultShell: cfg.DefaultShell,
-		statusFG:     cfg.StatusFG,
-		statusBG:     cfg.StatusBG,
 		setClipboard: cfg.SetClipboard,
+		palette:      cfg.Palette(),
+		paneTitles:   cfg.PaneTitles,
 	})
 
 	ln, err := ipc.Listen(ep)

@@ -218,7 +218,8 @@ func TestEchoInPane(t *testing.T) {
 
 func TestStatusBarShowsSession(t *testing.T) {
 	h := newHarness(t)
-	if !h.waitFor("[0]", 2*time.Second) {
+	// The session pill " 0 " is followed by window 0's tab, " 0 sh ".
+	if !h.waitFor(" 0 sh ", 2*time.Second) {
 		t.Fatalf("status bar never showed the session name; got:\n%q", h.screen())
 	}
 }
@@ -401,7 +402,7 @@ func TestExecSendKeysReachesPane(t *testing.T) {
 
 func TestExecRenameWindowShowsInStatus(t *testing.T) {
 	h := newHarness(t)
-	if !h.waitFor("[0]", 2*time.Second) {
+	if !h.waitFor("^b menu", 2*time.Second) {
 		t.Fatalf("status never appeared")
 	}
 	execCmd(t, h.ep, "rename-window BUILDX")
@@ -417,6 +418,35 @@ func TestExecRenameSessionReflectedInList(t *testing.T) {
 	out := execCmd(t, h.ep, "list-sessions")
 	if !strings.Contains(out, "prod:") {
 		t.Fatalf("list-sessions after rename = %q, want it to mention 'prod:'", out)
+	}
+}
+
+// prefix ',' / '$' open the prompt aimed at rename-window / rename-session:
+// the user types only the name, and Enter shows it in the status bar.
+func TestPrefixQuickRenameShowsInStatus(t *testing.T) {
+	h := newHarness(t)
+	if !h.waitFor("^b menu", 2*time.Second) {
+		t.Fatalf("status never appeared")
+	}
+	for _, c := range []struct{ key, label, name string }{
+		{",", "rename window: ", "QWIN"},
+		{"$", "rename session: ", "QSESS"},
+	} {
+		h.send("\x02" + c.key)
+		h.send(c.name)
+		if !h.waitFor(c.label+c.name, 2*time.Second) {
+			t.Fatalf("prefix %s did not open the %q prompt; got:\n%q", c.key, c.label, h.screen())
+		}
+		// Only what is painted after Enter counts: the prompt itself echoes
+		// the name too.
+		h.reset()
+		h.send("\r")
+		if !h.waitFor(c.name, 3*time.Second) {
+			t.Fatalf("prefix %s rename %q not shown in status bar; got:\n%q", c.key, c.name, h.screen())
+		}
+	}
+	if out := execCmd(t, h.ep, "list-sessions"); !strings.Contains(out, "QSESS:") {
+		t.Fatalf("list-sessions after prefix $ = %q, want it to mention 'QSESS:'", out)
 	}
 }
 
@@ -472,11 +502,11 @@ func TestMouseClickFocusesPane(t *testing.T) {
 
 func TestStatusBarPlusButtonAddsWindow(t *testing.T) {
 	h := newHarness(t)
-	if !h.waitFor("[+]", 2*time.Second) {
-		t.Fatalf("status bar never showed the [+] button; got:\n%q", h.screen())
+	if !h.waitFor("^b menu", 2*time.Second) {
+		t.Fatalf("status bar never appeared; got:\n%q", h.screen())
 	}
-	// Status row is the last row (24 in a 24-row terminal). " [0] 0:sh* " is
-	// 11 cells, so "[+]" sits at 1-based columns 12-14.
+	// Status row is the last row (24 in a 24-row terminal). " 0 " + " " +
+	// " 0 sh " is 10 cells, so the " + " button sits at 1-based columns 11-13.
 	h.send("\x1b[<0;13;24M")
 	h.send("\x1b[<0;13;24m")
 	out := ""
@@ -501,7 +531,7 @@ func TestStatusBarClickSwitchesWindow(t *testing.T) {
 	h.send("\x02c") // new window, now on window 1
 	time.Sleep(500 * time.Millisecond)
 	h.reset()
-	// Click window 0's entry in the status bar (1-based column 7 is inside "0:sh").
+	// Click window 0's entry in the status bar (1-based column 7 is inside " 0 sh ").
 	h.send("\x1b[<0;7;24M")
 	h.send("\x1b[<0;7;24m")
 	if !h.waitFor("STATUS_W0", 3*time.Second) {

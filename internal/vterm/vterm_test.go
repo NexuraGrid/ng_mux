@@ -22,6 +22,23 @@ func TestSnapshotReflectsWrites(t *testing.T) {
 	}
 }
 
+// The window title a program sets with OSC 0 or OSC 2 rides along in every
+// snapshot, live or scrollback, so the pane title bar can show it.
+func TestSnapshotCarriesWindowTitle(t *testing.T) {
+	term := New(20, 5, nil)
+	if got := term.Snapshot().Title; got != "" {
+		t.Fatalf("fresh title = %q, want empty", got)
+	}
+	term.Write([]byte("\x1b]2;vim notes.txt\x07"))
+	if got := term.Snapshot().Title; got != "vim notes.txt" {
+		t.Fatalf("title after OSC 2 = %q, want %q", got, "vim notes.txt")
+	}
+	term.Write([]byte("\x1b]0;htop\x1b\\"))
+	if got := term.ScrollbackView(0, 5).Title; got != "htop" {
+		t.Fatalf("scrollback title after OSC 0 = %q, want %q", got, "htop")
+	}
+}
+
 func TestScrollbackCapturesEvictedLines(t *testing.T) {
 	term := New(20, 4, nil) // 4 visible rows
 	term.SetHistoryLimit(100)

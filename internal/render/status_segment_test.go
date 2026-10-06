@@ -36,6 +36,10 @@ func TestStatusSegmentAttrAndColour(t *testing.T) {
 	if c.FG != 2 || c.Attr&vterm.AttrReverse != 0 {
 		t.Errorf("coloured cell = %+v, want FG 2 and no reverse", c)
 	}
+	// Its inherited background is the one the reversed bar shows (style FG).
+	if c.BG != uint32(DefaultStatusStyle.FG) {
+		t.Errorf("coloured cell BG = %d, want the bar's visible background %d", c.BG, DefaultStatusStyle.FG)
+	}
 	// Tail past the last segment falls back to the default style.
 	if tail := f.at(10, y); tail.Ch != ' ' || tail.Attr&vterm.AttrReverse == 0 {
 		t.Errorf("padding cell = %+v, want a reverse-video space", tail)

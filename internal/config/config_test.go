@@ -3,7 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/MauricioJC3/ng_mux/internal/render"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
+	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
 func writeConf(t *testing.T, body string) string {
@@ -136,5 +141,213 @@ func TestParseKeyForms(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("parseKey(%q) = %d, %v; want %d", in, got, err, want)
 		}
+	}
+}
+
+func TestThemeDefaultsDarkAndParses(t *testing.T) {
+	def, _ := LoadFile(filepath.Join(t.TempDir(), "none.conf"))
+	if def.Theme != "dark" {
+		t.Errorf("theme default = %q, want dark", def.Theme)
+	}
+	if got, want := def.Palette(), theme.Dark(); got != want {
+		t.Errorf("default palette = %+v, want the dark theme", got)
+	}
+	for _, name := range []string{"dark", "light", "mono"} {
+		cfg, _ := LoadFile(writeConf(t, "set theme "+name+"\n"))
+		if len(cfg.Warnings) != 0 || cfg.Theme != name {
+			t.Errorf("`set theme %s` = %q, warnings %v", name, cfg.Theme, cfg.Warnings)
+		}
+	}
+	bad, _ := LoadFile(writeConf(t, "set theme solarized\n"))
+	if len(bad.Warnings) != 1 || bad.Theme != "dark" {
+		t.Errorf("unknown theme should warn and keep dark, got %q / %v", bad.Theme, bad.Warnings)
+	}
+}
+
+// An explicit status-fg / status-bg still wins over the theme's bar colours;
+// without one the theme decides. The bar is reverse video, so status-fg (the
+// visible text) lands in Palette.StatusBG and status-bg in Palette.StatusFG.
+func TestPaletteAppliesStatusColourOverrides(t *testing.T) {
+	mono, _ := LoadFile(writeConf(t, "set theme mono\n"))
+	if got := mono.Palette(); got != theme.Mono() {
+		t.Errorf("mono palette = %+v, want theme.Mono()", got)
+	}
+	cfg, _ := LoadFile(writeConf(t, "set theme mono\nset status-fg 3\nset status-bg 4\n"))
+	pal := cfg.Palette()
+	if pal.StatusFG != 4 || pal.StatusBG != 3 {
+		t.Errorf("palette status FG/BG = %d/%d, want 4/3 (reverse video of fg 3 on bg 4)", pal.StatusFG, pal.StatusBG)
+	}
+	if pal.Active != theme.Mono().Active {
+		t.Errorf("status overrides should not touch the rest of the theme: %+v", pal.Active)
+	}
+}
+
+// What a user sets is what the bar shows: a padding cell of the bar displays
+// status-bg behind status-fg text.
+func TestStatusColoursRenderAsConfigured(t *testing.T) {
+	for _, th := range []string{"dark", "light", "mono"} {
+		cfg, _ := LoadFile(writeConf(t, "set theme "+th+"\nset status-fg bright-white\nset status-bg blue\n"))
+		pal := cfg.Palette()
+		f := render.ComposeThemedInto(nil, 10, 2, nil, nil, &pal)
+		c := f.Cells[1*f.Cols+9] // last column of the bar: padding
+		fg, bg := c.FG, c.BG
+		if c.Attr&vterm.AttrReverse != 0 {
+			fg, bg = bg, fg
+		}
+		if fg != 15 || bg != 4 {
+			t.Errorf("%s: bar padding shows fg %d on bg %d, want 15 on 4", th, fg, bg)
+		}
+	}
+}
+
+func TestParseColorValues(t *testing.T) {
+	cases := map[string]int{
+		"0": 0, "7": 7, "255": 255,
+		"black": 0, "red": 1, "green": 2, "yellow": 3,
+		"blue": 4, "magenta": 5, "cyan": 6, "white": 7,
+		"bright-black": 8, "bright-red": 9, "bright-white": 15,
+		"Blue": 4, "BRIGHT-Cyan": 14,
+		"default": theme.Default, "Default": theme.Default,
+	}
+	for in, want := range cases {
+		got, err := parseColor(in)
+		if err != nil || got != want {
+			t.Errorf("parseColor(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"256", "-1", "purple", "bright-", "bright-default", "0x10", ""} {
+		if _, err := parseColor(bad); err == nil {
+			t.Errorf("parseColor(%q) should fail", bad)
+		}
+	}
+}
+
+func TestColourKeysParse(t *testing.T) {
+	cfg, _ := LoadFile(writeConf(t, `
+set session-fg black
+set session-bg 5
+set tab-fg bright-black
+set tab-bg default
+set tab-active-fg White
+set tab-active-bg 2
+set tab-alert-fg red
+set tab-alert-bg 0
+set mode-fg 0
+set mode-bg yellow
+set border-fg 8
+set border-active-fg cyan
+set pane-title-active-fg 0
+set pane-title-active-bg bright-blue
+`))
+	if len(cfg.Warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", cfg.Warnings)
+	}
+	want := map[string]int{
+		"session-fg": 0, "session-bg": 5, "tab-fg": 8, "tab-bg": theme.Default,
+		"tab-active-fg": 7, "tab-active-bg": 2, "tab-alert-fg": 1, "tab-alert-bg": 0,
+		"mode-fg": 0, "mode-bg": 3, "border-fg": 8, "border-active-fg": 6,
+		"pane-title-active-fg": 0, "pane-title-active-bg": 12,
+	}
+	if len(cfg.Colours) != len(want) {
+		t.Errorf("Colours = %v, want %v", cfg.Colours, want)
+	}
+	for k, v := range want {
+		if cfg.Colours[k] != v {
+			t.Errorf("%s = %d, want %d", k, cfg.Colours[k], v)
+		}
+	}
+}
+
+// A bad colour warns, naming the key and the value, and is ignored.
+func TestBadColourValueWarns(t *testing.T) {
+	cfg, _ := LoadFile(writeConf(t, "set tab-active-bg purple\nset status-fg 300\nset border-bg 4\n"))
+	if len(cfg.Warnings) != 3 {
+		t.Fatalf("expected 3 warnings, got %v", cfg.Warnings)
+	}
+	for i, want := range [][]string{{"tab-active-bg", "purple"}, {"status-fg", "300"}, {"border-bg"}} {
+		for _, w := range want {
+			if !strings.Contains(cfg.Warnings[i], w) {
+				t.Errorf("warning %q should mention %q", cfg.Warnings[i], w)
+			}
+		}
+	}
+	if len(cfg.Colours) != 0 || cfg.StatusFG != -1 {
+		t.Errorf("bad values should be ignored, got %v / status-fg %d", cfg.Colours, cfg.StatusFG)
+	}
+	if cfg.Palette() != theme.Dark() {
+		t.Error("ignored colours should leave the theme untouched")
+	}
+}
+
+// Each key changes only its own colour, over every theme, and keeps the
+// theme's attributes.
+func TestPaletteAppliesColourKeys(t *testing.T) {
+	type field struct {
+		style func(*theme.Palette) *theme.Style
+		bg    bool
+	}
+	fields := map[string]field{
+		"session-fg":           {func(p *theme.Palette) *theme.Style { return &p.Session }, false},
+		"session-bg":           {func(p *theme.Palette) *theme.Style { return &p.Session }, true},
+		"tab-fg":               {func(p *theme.Palette) *theme.Style { return &p.Tab }, false},
+		"tab-bg":               {func(p *theme.Palette) *theme.Style { return &p.Tab }, true},
+		"tab-active-fg":        {func(p *theme.Palette) *theme.Style { return &p.Active }, false},
+		"tab-active-bg":        {func(p *theme.Palette) *theme.Style { return &p.Active }, true},
+		"tab-alert-fg":         {func(p *theme.Palette) *theme.Style { return &p.Alert }, false},
+		"tab-alert-bg":         {func(p *theme.Palette) *theme.Style { return &p.Alert }, true},
+		"mode-fg":              {func(p *theme.Palette) *theme.Style { return &p.Mode }, false},
+		"mode-bg":              {func(p *theme.Palette) *theme.Style { return &p.Mode }, true},
+		"border-fg":            {func(p *theme.Palette) *theme.Style { return &p.BorderDim }, false},
+		"border-active-fg":     {func(p *theme.Palette) *theme.Style { return &p.BorderActive }, false},
+		"pane-title-active-fg": {func(p *theme.Palette) *theme.Style { return &p.TitleActive }, false},
+		"pane-title-active-bg": {func(p *theme.Palette) *theme.Style { return &p.TitleActive }, true},
+	}
+	if len(fields) != len(colourKeys) {
+		t.Fatalf("test covers %d keys, config has %d", len(fields), len(colourKeys))
+	}
+	for _, th := range theme.Names() {
+		base, _ := theme.Lookup(th)
+		for key, f := range fields {
+			cfg, _ := LoadFile(writeConf(t, "set theme "+th+"\nset "+key+" 13\n"))
+			got := cfg.Palette()
+			want := base
+			st := f.style(&want)
+			// The colour the user sees on that side, even through reverse video.
+			if f.bg != (st.Attr&vterm.AttrReverse != 0) {
+				st.BG = 13
+			} else {
+				st.FG = 13
+			}
+			if got != want {
+				t.Errorf("%s / %s: palette %+v, want %+v", th, key, got, want)
+			}
+			if f.style(&got).Attr != f.style(&base).Attr {
+				t.Errorf("%s / %s changed the attributes", th, key)
+			}
+		}
+	}
+}
+
+// Mono's focused title is reverse video: its visible background is FG.
+func TestMonoReverseTitleOverridesVisibleSide(t *testing.T) {
+	cfg, _ := LoadFile(writeConf(t, "set theme mono\nset pane-title-active-bg 4\n"))
+	st := cfg.Palette().TitleActive
+	if st.FG != 4 || st.BG != theme.Default {
+		t.Errorf("mono title-active = %+v, want FG 4 (shown as background through reverse)", st)
+	}
+}
+
+func TestPaneTitlesDefaultOnAndCanBeDisabled(t *testing.T) {
+	def, _ := LoadFile(filepath.Join(t.TempDir(), "none.conf"))
+	if !def.PaneTitles {
+		t.Errorf("pane-titles should default on")
+	}
+	off, _ := LoadFile(writeConf(t, "set pane-titles off\n"))
+	if off.PaneTitles {
+		t.Errorf("`set pane-titles off` should disable them")
+	}
+	bad, _ := LoadFile(writeConf(t, "set pane-titles maybe\n"))
+	if len(bad.Warnings) != 1 || !bad.PaneTitles {
+		t.Errorf("a bad pane-titles value should warn and keep the default, got %v / %v", bad.PaneTitles, bad.Warnings)
 	}
 }

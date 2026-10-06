@@ -11,15 +11,21 @@ import (
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
 	"github.com/MauricioJC3/ng_mux/internal/ptyx"
 	"github.com/MauricioJC3/ng_mux/internal/render"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
 	"github.com/MauricioJC3/ng_mux/internal/vterm"
 )
 
 // sessionOpts carries the configuration a session needs at creation time.
 type sessionOpts struct {
-	historyLimit       int
-	defaultShell       string // empty => platform default
-	statusFG, statusBG int
-	setClipboard       bool // mirror copy-mode yanks to the OS clipboard (OSC 52)
+	historyLimit int
+	defaultShell string // empty => platform default
+	setClipboard bool   // mirror copy-mode yanks to the OS clipboard (OSC 52)
+
+	// palette styles the status bar, borders, pane titles, badges and the
+	// copy-mode indicator. The zero value means theme.Dark().
+	palette theme.Palette
+	// paneTitles draws a title line above each pane of a split window.
+	paneTitles bool
 
 	// newPane builds a pane. Nil means the production factory (startPane);
 	// tests inject a fake so session/window logic runs without a real shell.
@@ -53,6 +59,11 @@ type session struct {
 	pasteBuf   string      // last copy-mode yank; target of the paste command
 	drag       dragState   // in-progress mouse border drag
 	statusHits []statusHit // clickable status-bar regions, rebuilt each frame
+
+	// tabScratch / tabWidths are buildStatus's per-frame tab texts and their
+	// display widths, kept so a steady repaint does not regrow them.
+	tabScratch []string
+	tabWidths  []int
 
 	// mouseFwd is the pane a press started forwarding mouse reports to (0
 	// when no forwarded press is in progress). It is set by routePress and
@@ -96,6 +107,9 @@ func newSession(name string, cols, rows int, opts sessionOpts, onEmpty func(stri
 	if opts.newPane == nil {
 		opts.newPane = startPane
 	}
+	if opts.palette == (theme.Palette{}) {
+		opts.palette = theme.Dark()
+	}
 	s := &session{
 		name:     name,
 		created:  time.Now(),
@@ -124,6 +138,7 @@ func (s *session) spawnWindow(cols, rows int) (*window, error) {
 	if err != nil {
 		return nil, err
 	}
+	w.titles = s.opts.paneTitles
 	for _, p := range w.panes {
 		go p.pump(s.reportExit)
 	}
@@ -149,6 +164,7 @@ func (s *session) breakPane() error {
 	}
 	nw := wrapWindow(s.nextWin(), s.defaultWindowName(), p, s.opts.defaultShell,
 		s.opts.historyLimit, s.opts.newPane, s.opts.logf)
+	nw.titles = s.opts.paneTitles
 	s.windows = append(s.windows, nw)
 	s.cur = len(s.windows) - 1
 	nw.applyLayout(cols, rows)
@@ -178,7 +194,7 @@ func (s *session) joinPane(srcIdx int, dir layout.Orientation) error {
 		return fmt.Errorf("join-pane: source window has no pane")
 	}
 	cols, rows := s.cols, s.contentRows()
-	if !layout.CanSplit(dst.tree, dst.active, dir, dst.outer(cols, rows)) {
+	if !layout.CanSplit(dst.tree, dst.active, dir, dst.outerFor(cols, rows, len(dst.panes)+1)) {
 		return fmt.Errorf("join-pane: not enough room to split the target window")
 	}
 
@@ -397,8 +413,8 @@ func (s *session) stepWindow(delta int) {
 // the session is "clean" until something changes again. Only ever called from
 // the broadcast goroutine.
 func (s *session) frame() *render.Frame {
-	cols, rows, views, status, style := s.frameInputs()
-	f := render.ComposeStyledInto(s.frameBuf[s.frameIdx], cols, rows, views, status, style)
+	cols, rows, views, status := s.frameInputs()
+	f := render.ComposeThemedInto(s.frameBuf[s.frameIdx], cols, rows, views, status, &s.opts.palette)
 	s.frameBuf[s.frameIdx] = f
 	s.frameIdx ^= 1
 	return f
@@ -408,7 +424,7 @@ func (s *session) frame() *render.Frame {
 // status bar under mu, released with defer so a recovered panic while building
 // a view can never leave the session locked (which would freeze its input and
 // every later frame).
-func (s *session) frameInputs() (cols, rows int, views []render.PaneView, status []render.StatusSegment, style render.StatusStyle) {
+func (s *session) frameInputs() (cols, rows int, views []render.PaneView, status []render.StatusSegment) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.needsRepaint = false
@@ -421,8 +437,7 @@ func (s *session) frameInputs() (cols, rows int, views []render.PaneView, status
 		s.viewScratch = views
 	}
 	status = s.buildStatus(cols)
-	style = render.StatusStyle{FG: s.opts.statusFG, BG: s.opts.statusBG}
-	return cols, rows, views, status, style
+	return cols, rows, views, status
 }
 
 // dirty reports whether the next frame would differ from the last one frame()
@@ -443,6 +458,13 @@ func (s *session) dirty() bool {
 	// so counting hidden panes kept a session with a busy (or merely fresh)
 	// background window dirty forever, recomposing every tick. Showing a hidden
 	// pane (select-window, unzoom, a status click) marks the session itself.
+	// A hidden window whose activity mark is stale needs one repaint to show
+	// (or drop) it; after that activityShown matches and it costs nothing.
+	for i, hw := range s.windows {
+		if i != s.cur && hw.hasOutput() != hw.activityShown {
+			return true
+		}
+	}
 	w := s.current()
 	if w == nil {
 		return false
@@ -458,81 +480,225 @@ func (s *session) dirty() bool {
 	return false
 }
 
-// statusHit is a clickable region of the status bar: [X0,X1) maps to an action.
+// statusHit is a clickable region of the status bar: [x0,x1] (inclusive)
+// maps to an action. The tab-strip overflow arrows are select-window hits for
+// the nearest hidden window on their side.
 type statusHit struct {
 	x0, x1 int
-	action string // "select-window" (win in N) or "new-window"
+	action string // "select-window" (win in n) or "new-window"
 	n      int
 }
 
-// statusHint is the right-aligned reminder of the two commands a new user most
-// often needs: how to close the focused pane and how to leave the session.
-const statusHint = "^b x close pane · ^b d exit "
+// statusHint is the right-aligned reminder for a new user: the prefix alone
+// opens the key cheat-sheet, and ^b d leaves the session running.
+const statusHint = "^b menu · ^b d detach "
 
-// buildStatus lays out "[name] 0:win 1:win* … [+]" on the left, then a hint and
-// a clock on the right, padded to the full width. The active window, the
-// session name and the [+] button are bold so the bar reads at a glance. It
-// also records clickable regions in s.statusHits; the left-hand layout (and so
-// every hit column) is byte-for-byte what the string version produced. Caller
-// holds mu.
+// maxTabName caps a window name's width on its tab so one long name cannot
+// push every other tab off the bar.
+const maxTabName = 20
+
+// Tab-strip overflow arrows, shown when windows are scrolled out of view on
+// that side. Both are in CP437.
+const (
+	arrowLeft  = "«"
+	arrowRight = "»"
+)
+
+// truncateWidth shortens s to at most max display columns, ending in "…"
+// when it had to cut.
+func truncateWidth(s string, max int) string {
+	if vterm.StringWidth(s) <= max {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := vterm.RuneWidth(r)
+		if w+rw > max-1 {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	b.WriteString("…")
+	return b.String()
+}
+
+// visibleTabs picks the contiguous run of tabs [lo,hi] to show in room
+// columns, given each tab's width. It always contains cur, then grows one tab
+// at a time alternating right and left while the next one fits, so the
+// current tab sits near the middle of what is shown. If cur alone is wider
+// than room it is still the whole run (the frame edge clips it).
+func visibleTabs(widths []int, cur, room int) (lo, hi int) {
+	lo, hi = cur, cur
+	used := widths[cur]
+	for grew := true; grew; {
+		grew = false
+		if hi+1 < len(widths) && used+widths[hi+1] <= room {
+			hi++
+			used += widths[hi]
+			grew = true
+		}
+		if lo > 0 && used+widths[lo-1] <= room {
+			lo--
+			used += widths[lo]
+			grew = true
+		}
+	}
+	return lo, hi
+}
+
+// buildStatus lays out the bar as
+//
+//	session  0 shell  1 vim  +  ZOOM          ^b menu · ^b d detach  15:04
+//
+// The session name and the active tab are solid colour pills, a hidden window
+// with unseen output is in the alert colour, and the right side holds a hint
+// and a clock, padded to the full width. When the tabs do not fit, the hint
+// goes first; then the tab strip scrolls to keep the current window in view,
+// with « / » marking windows hidden on either side (in the alert colour if
+// one of them has unseen output). It also records clickable regions in
+// s.statusHits. Caller holds mu.
 func (s *session) buildStatus(cols int) []render.StatusSegment {
 	s.statusHits = s.statusHits[:0]
+	pal := &s.opts.palette
 
 	var segs []render.StatusSegment
-	col := 0 // running rune column, for click regions and padding
-	add := func(text string, attr uint16) {
+	col := 0 // running display column, for click regions and padding
+	add := func(text string, st theme.Style) {
 		if text == "" {
 			return
 		}
-		segs = append(segs, render.StatusSegment{
-			Text: text, FG: render.InheritColour, BG: render.InheritColour, Attr: attr,
-		})
+		segs = append(segs, render.StatusSegment{Text: text, FG: st.FG, BG: st.BG, Attr: st.Attr})
 		col += vterm.StringWidth(text)
 	}
+	plain := func(text string, attr uint16) {
+		add(text, theme.Style{FG: theme.Inherit, BG: theme.Inherit, Attr: attr})
+	}
 
-	add(fmt.Sprintf(" [%s] ", s.name), vterm.AttrBold)
+	add(" "+truncateWidth(s.name, maxTabName)+" ", pal.Session)
+	plain(" ", 0)
 
+	// Settle each window's activity mark first: the tabs and the overflow
+	// arrows both read it, and session.dirty compares against it.
+	tabs := s.tabScratch[:0]
+	widths := s.tabWidths[:0]
+	total := 0
 	for i, w := range s.windows {
-		mark := " "
-		attr := uint16(0)
 		if i == s.cur {
-			mark, attr = "*", vterm.AttrBold
+			// Being looked at: whatever it printed has been seen.
+			w.clearOutput()
+			w.activityShown = false
+		} else {
+			w.activityShown = w.hasOutput()
 		}
-		entry := fmt.Sprintf("%d:%s%s ", i, w.name, mark)
+		entry := fmt.Sprintf(" %d %s ", i, truncateWidth(w.name, maxTabName))
+		tabs = append(tabs, entry)
+		widths = append(widths, vterm.StringWidth(entry))
+		total += widths[i]
+	}
+	s.tabScratch, s.tabWidths = tabs, widths
+
+	var modes []string
+	modesW := 0
+	if w := s.current(); w != nil {
+		if w.zoom != 0 {
+			modes = append(modes, " ZOOM ")
+			modesW += 1 + 6
+		}
+		if p := w.panes[w.active]; p != nil && p.copy != nil {
+			modes = append(modes, " COPY ")
+			modesW += 1 + 6
+		}
+	}
+
+	const plusText = " + "
+	clock := " " + time.Now().Format("15:04") + " "
+	clockW := vterm.StringWidth(clock)
+	// Columns left for the tab strip once everything else (and at least one
+	// column of padding before the clock) has its place.
+	room := cols - col - len(plusText) - modesW - 1 - clockW
+
+	lo, hi := 0, len(tabs)-1
+	overflow := total > room && len(tabs) > 0
+	showClock := true
+	if overflow {
+		room -= 2 // one column for each arrow
+		if s.cur >= 0 && s.cur < len(widths) && widths[s.cur] > room {
+			// Even the current tab alone does not fit: give it the clock's room.
+			showClock = false
+			room += 1 + clockW
+		}
+		lo, hi = visibleTabs(widths, s.cur, room)
+	}
+
+	// arrow draws one overflow arrow selecting window target, alerting when
+	// any window in [from,to) has unseen output.
+	arrow := func(text string, target, from, to int) {
+		st := theme.Style{FG: theme.Inherit, BG: theme.Inherit}
+		for i := from; i < to; i++ {
+			if s.windows[i].activityShown {
+				st = pal.Alert
+				break
+			}
+		}
+		s.statusHits = append(s.statusHits, statusHit{x0: col, x1: col, action: "select-window", n: target})
+		add(text, st)
+	}
+	if overflow {
+		if lo > 0 {
+			arrow(arrowLeft, lo-1, 0, lo)
+		} else {
+			plain(" ", 0)
+		}
+	}
+	for i := lo; i <= hi; i++ {
 		x0 := col
-		add(entry, attr)
+		switch w := s.windows[i]; {
+		case i == s.cur:
+			add(tabs[i], pal.Active)
+		case w.activityShown:
+			add(tabs[i], pal.Alert)
+		default:
+			add(tabs[i], pal.Tab)
+		}
 		s.statusHits = append(s.statusHits, statusHit{
-			x0: x0, x1: x0 + vterm.StringWidth(entry) - 1, // exclude the trailing space
-			action: "select-window", n: i,
+			x0: x0, x1: col - 1, action: "select-window", n: i,
 		})
+	}
+	if overflow {
+		if hi < len(tabs)-1 {
+			arrow(arrowRight, hi+1, hi+1, len(tabs))
+		} else {
+			plain(" ", 0)
+		}
 	}
 
 	plusX0 := col
-	add("[+] ", vterm.AttrBold)
-	s.statusHits = append(s.statusHits, statusHit{x0: plusX0, x1: plusX0 + 2, action: "new-window"})
+	plain(plusText, vterm.AttrBold)
+	s.statusHits = append(s.statusHits, statusHit{x0: plusX0, x1: col - 1, action: "new-window"})
 
-	if w := s.current(); w != nil {
-		if w.zoom != 0 {
-			add("-- ZOOM -- ", vterm.AttrBold)
-		}
-		if p := w.panes[w.active]; p != nil && p.copy != nil {
-			add("-- COPY -- ", vterm.AttrBold)
-		}
+	for _, m := range modes {
+		plain(" ", 0)
+		add(m, pal.Mode)
 	}
 
-	clock := time.Now().Format("15:04") + " "
+	if !showClock {
+		if pad := cols - col; pad > 0 {
+			plain(strings.Repeat(" ", pad), 0)
+		}
+		return segs
+	}
 	// Prefer "<hint> <clock>"; if that will not fit, drop the hint; if even the
 	// clock will not fit, leave the row to be clipped at the frame edge.
-	right := statusHint + clock
-	if col+1+vterm.StringWidth(right) > cols {
-		right = clock
+	hint := statusHint
+	if overflow || col+1+vterm.StringWidth(hint+clock) > cols {
+		hint = ""
 	}
-	if pad := cols - col - vterm.StringWidth(right); pad >= 1 {
-		add(strings.Repeat(" ", pad), 0)
-		if right != clock {
-			add(statusHint, 0)
-		}
-		add(clock, vterm.AttrBold)
+	if pad := cols - col - vterm.StringWidth(hint+clock); pad >= 1 {
+		plain(strings.Repeat(" ", pad), 0)
+		plain(hint, 0)
+		plain(clock, vterm.AttrBold)
 	}
 	return segs
 }
