@@ -347,6 +347,9 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 				s.sendClipboard(cl, yank)
 				if repaint {
 					s.markDirty(cur)
+					// Copy-mode keys still get a full repaint: unlike a drag
+					// they fire once per keystroke, and the e2e harness reads
+					// the raw byte stream, expecting whole lines after a jump.
 					cl.reset()
 				}
 			}
@@ -366,8 +369,13 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 			repaint, yank := cur.mouseAs(&cl.mouse, msg.Name, msg.MX, msg.MY, msg.MB)
 			s.sendClipboard(cl, yank)
 			if repaint {
+				// Only mark the session dirty: the client's screen still
+				// matches the last frame it was sent, so the next frame is a
+				// diff. A reset here would clear and redraw the whole screen
+				// on every drag motion, which is what made selecting flicker.
+				// Full repaints are for when the screen diverged (Resize,
+				// Refresh after a local popup, a client-issued command).
 				s.markDirty(cur)
-				cl.reset()
 			}
 		case protocol.TypeExec:
 			out, err := s.execCommand(cl, msg.Name)

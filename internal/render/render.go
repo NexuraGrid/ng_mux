@@ -557,10 +557,16 @@ func StampStatusRight(f *Frame, seg StatusSegment, keep int, pal *theme.Palette)
 // prev into one showing next. If prev is nil or differently sized, it does a
 // full repaint. If nothing visible differs (cells, cursor position and
 // visibility), it returns nil so an unchanged frame costs no bytes.
+//
+// The output is wrapped in synchronized-output mode (DEC private mode 2026):
+// a terminal that supports it presents the whole frame at once even when the
+// bytes arrive in several reads, so a large repaint never shows half drawn.
+// Terminals without it ignore the unknown mode.
 func Paint(prev, next *Frame) []byte {
 	var b bytes.Buffer
 	full := prev == nil || prev.Cols != next.Cols || prev.Rows != next.Rows
 
+	b.WriteString(syncBegin)
 	b.WriteString("\x1b[?25l") // hide cursor while we draw
 
 	if full {
@@ -627,8 +633,15 @@ func Paint(prev, next *Frame) []byte {
 		b.WriteByte('H')
 		b.WriteString("\x1b[?25h")
 	}
+	b.WriteString(syncEnd)
 	return b.Bytes()
 }
+
+// syncBegin and syncEnd bracket a frame in synchronized-output mode.
+const (
+	syncBegin = "\x1b[?2026h"
+	syncEnd   = "\x1b[?2026l"
+)
 
 // writeSGR emits a full "reset then set" SGR sequence for cell c.
 func writeSGR(b *bytes.Buffer, c Cell) {
