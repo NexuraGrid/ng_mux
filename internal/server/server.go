@@ -211,6 +211,7 @@ func (s *Server) sessionEmptied(name string) {
 		}
 	}
 	s.mu.Unlock()
+	s.fitSessions()
 }
 
 func (s *Server) acceptLoop() {
@@ -323,14 +324,11 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 		pc.Close()
 		return
 	}
-	if attach.Cols > 0 && attach.Rows > 0 {
-		sess.resize(attach.Cols, attach.Rows)
-	}
-
 	cl := newClient(pc, sess.name)
 	cl.setSize(attach.Cols, attach.Rows)
 	s.addClient(cl)
 	defer s.removeClient(cl)
+	s.fitSessions()
 
 	go cl.writeLoop()
 	cl.reset()
@@ -357,15 +355,13 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 			}
 		case protocol.TypeResize:
 			cl.setSize(msg.Cols, msg.Rows)
-			if cur != nil {
-				cur.resize(msg.Cols, msg.Rows)
-				s.markDirty(cur)
-			}
+			s.fitSessions()
 			cl.reset()
 		case protocol.TypeRefresh:
+			s.fitSessions()
 			cl.reset()
 		case protocol.TypeMouse:
-			if cur != nil && cur.mouse(msg.Name, msg.MX, msg.MY, msg.MB) {
+			if cur != nil && cur.mouseAs(&cl.mouse, msg.Name, msg.MX, msg.MY, msg.MB) {
 				s.markDirty(cur)
 				cl.reset()
 			}
@@ -398,10 +394,20 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 }
 
 func (s *Server) switchClientSession(cl *client, forward bool) {
+	if !s.stepClientSession(cl, forward) {
+		return
+	}
+	cl.mouse = mouseState{} // a half-finished drag belongs to the old session
+	s.fitSessions()
+}
+
+// stepClientSession moves cl to the next (or previous) session in order and
+// reports whether it moved.
+func (s *Server) stepClientSession(cl *client, forward bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.order) < 2 {
-		return
+		return false
 	}
 	idx := 0
 	for i, n := range s.order {
@@ -416,6 +422,7 @@ func (s *Server) switchClientSession(cl *client, forward bool) {
 		idx = (idx - 1 + len(s.order)) % len(s.order)
 	}
 	cl.setSession(s.order[idx])
+	return true
 }
 
 func (s *Server) sessionByName(name string) *session {
@@ -544,9 +551,64 @@ func (s *Server) removeClient(c *client) {
 	s.mu.Lock()
 	delete(s.clients, c)
 	s.mu.Unlock()
+	s.fitSessions()
 	// Let a bye queued just before returning (detach, kill-server) reach the
 	// wire before the connection closes.
 	c.closeAfterFlush(flushTimeout)
+}
+
+// fitSessions sizes every session that has viewers to the smallest of them:
+// the minimum width and the minimum height across the clients currently
+// viewing it (tmux's window-size smallest). All viewers of a session receive
+// the same frame, so this is the only size every one of them can show without
+// wrapping or scrolling; a larger terminal just shows the frame with blank
+// space around it (the full repaint after a size change clears it). Sessions
+// nobody is viewing keep their last size. Viewers of a session whose size
+// changed get a full repaint.
+//
+// It is called whenever the set of viewers or one of their sizes may have
+// changed: attach, detach, resize, refresh and session switches.
+func (s *Server) fitSessions() {
+	type fit struct {
+		cols, rows int
+		viewers    []*client
+	}
+	s.mu.Lock()
+	fits := make(map[*session]*fit)
+	for c := range s.clients {
+		sess := s.sessions[c.session()]
+		if sess == nil {
+			continue
+		}
+		f := fits[sess]
+		if f == nil {
+			f = &fit{}
+			fits[sess] = f
+		}
+		f.viewers = append(f.viewers, c)
+		cols, rows := c.size()
+		if cols <= 0 || rows <= 0 {
+			continue // size unknown: does not constrain the session
+		}
+		if f.cols == 0 || cols < f.cols {
+			f.cols = cols
+		}
+		if f.rows == 0 || rows < f.rows {
+			f.rows = rows
+		}
+	}
+	s.mu.Unlock()
+
+	for sess, f := range fits {
+		if f.cols == 0 || f.rows == 0 {
+			continue
+		}
+		if sess.resize(f.cols, f.rows) {
+			for _, c := range f.viewers {
+				c.reset()
+			}
+		}
+	}
 }
 
 func (s *Server) shutdownAll() {

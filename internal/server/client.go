@@ -53,6 +53,11 @@ type client struct {
 	sess     string       // name of the session this client is currently viewing
 	cols     int          // last terminal size this client reported
 	rows     int
+
+	// mouse is this client's in-progress pointer interaction. It is read and
+	// written only by the client's own serveClient goroutine, under the lock
+	// of the session the event is routed to.
+	mouse mouseState
 }
 
 func newClient(pc *protocol.Conn, session string) *client {

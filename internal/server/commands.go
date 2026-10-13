@@ -342,10 +342,8 @@ func cmdNewSession(c *cmdCtx) (string, error) {
 		return "", err
 	}
 	if c.cl != nil {
-		if cols, rows := c.cl.size(); cols > 0 && rows > 0 {
-			sess.resize(cols, rows)
-		}
 		c.cl.setSession(sess.name)
+		c.srv.fitSessions()
 	}
 	return "", nil
 }
