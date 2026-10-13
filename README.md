@@ -38,6 +38,8 @@ Working now:
 - **preset layouts**: `select-layout even-horizontal | even-vertical | tiled |
   main-vertical | main-horizontal`
 - **rename** windows and sessions (`Ctrl-b ,` / `Ctrl-b $`)
+- **nested tmux**: `Ctrl-b Ctrl-b` sends a literal prefix, `F12` toggles a
+  passthrough mode that sends every key to the pane
 - **mouse** (on by default; `set mouse off` to disable): click a pane to focus
   it, drag a border to resize, wheel to scroll history, click a window name or
   the `[+]` button in the status bar
@@ -168,6 +170,23 @@ Prefix is **Ctrl-b** (same as tmux).
 | `Ctrl-b :`      | command prompt             |
 | `Ctrl-b d`      | detach                     |
 | `Ctrl-b Ctrl-b` | send a literal Ctrl-b      |
+| `F12`           | passthrough mode on / off (no prefix needed) |
+
+### Nested multiplexers (tmux or ngmux inside a pane)
+
+Running tmux (or another ngmux) inside an ngmux pane, both want `Ctrl-b`. Two
+ways to reach the inner one:
+
+- `Ctrl-b Ctrl-b` sends one literal `Ctrl-b` to the pane, so `Ctrl-b Ctrl-b c`
+  is the inner multiplexer's `Ctrl-b c`.
+- `F12` turns on **passthrough**: every key, the prefix included, goes straight
+  to the pane, and the status bar shows a `PASSTHROUGH · F12` pill. Press `F12`
+  again to get the outer ngmux back. The mode belongs to your client only; other
+  clients attached to the same session are unaffected. To put it on a prefix key
+  as well, add `bind P passthrough` to the config (or type `Ctrl-b :
+  passthrough`).
+
+Alternatively give the outer ngmux a different prefix (`set prefix C-a`).
 
 In copy-mode: arrows / PageUp / PageDown move and scroll, `g` / `G` jump to the
 oldest / newest line, `Space` starts a selection, `Enter` or `y` copies it and

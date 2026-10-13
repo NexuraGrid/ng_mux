@@ -326,6 +326,7 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 	}
 	cl := newClient(pc, sess.name)
 	cl.setSize(attach.Cols, attach.Rows)
+	cl.pal = &s.opts.palette
 	s.addClient(cl)
 	defer s.removeClient(cl)
 	s.fitSessions()
@@ -360,6 +361,8 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 		case protocol.TypeRefresh:
 			s.fitSessions()
 			cl.reset()
+		case protocol.TypePassthrough:
+			cl.setPassthrough(msg.N != 0)
 		case protocol.TypeMouse:
 			if cur != nil && cur.mouseAs(&cl.mouse, msg.Name, msg.MX, msg.MY, msg.MB) {
 				s.markDirty(cur)

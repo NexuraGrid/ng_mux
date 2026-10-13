@@ -2,10 +2,12 @@ package server
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
+	"github.com/MauricioJC3/ng_mux/internal/render"
 )
 
 // attachPipe attaches a client to srv over an in-memory pipe at the given size
@@ -95,4 +97,60 @@ func TestMouseStateIsPerClient(t *testing.T) {
 	if !a.drag.active {
 		t.Fatal("client b's release cancelled client a's drag")
 	}
+}
+
+// TestPassthroughMarksOnlyThatClientsStatusBar: a client in passthrough mode
+// sees a PASSTHROUGH marker on its status bar; another client viewing the same
+// session does not, and the marker goes away when the mode is turned off.
+func TestPassthroughMarksOnlyThatClientsStatusBar(t *testing.T) {
+	srv, _, sess := setupSession(t)
+	a := attachPipe(t, srv, "0", 80, 24)
+	waitSessSize(t, sess, 80, 24)
+
+	var ca, cb *client
+	waitFor(t, func() bool {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		return len(srv.clients) == 1
+	}, time.Second)
+	srv.mu.Lock()
+	for c := range srv.clients {
+		ca = c
+	}
+	srv.mu.Unlock()
+	cb = testClient("0")
+
+	writeMsg(t, a, protocol.Message{Type: protocol.TypePassthrough, N: 1})
+	waitFor(t, ca.passthroughOn, time.Second)
+
+	frame := sess.frame()
+	marked := func(c *client) bool {
+		waitFor(t, func() bool { return !c.writerBusy() }, time.Second)
+		c.reset()
+		c.offerFrame(frame)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return strings.Contains(statusRowText(&c.shown), "PASSTHROUGH")
+	}
+	if !marked(ca) {
+		t.Fatal("client in passthrough: status row has no PASSTHROUGH marker")
+	}
+	if marked(cb) {
+		t.Fatal("a client not in passthrough got the marker")
+	}
+
+	writeMsg(t, a, protocol.Message{Type: protocol.TypePassthrough, N: 0})
+	waitFor(t, func() bool { return !ca.passthroughOn() }, time.Second)
+	if marked(ca) {
+		t.Fatal("marker still shown after passthrough was turned off")
+	}
+}
+
+func statusRowText(f *render.Frame) string {
+	var b strings.Builder
+	y := f.Rows - 1
+	for x := 0; x < f.Cols; x++ {
+		b.WriteRune(f.Cells[y*f.Cols+x].Ch)
+	}
+	return b.String()
 }

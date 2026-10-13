@@ -16,7 +16,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 
 ## Tasks
 - [x] T1 Multi-client sizing: session size = smallest attached client; recompute on attach/detach/resize/refresh; per-client mouse state. Route: delegated (multi-file server). 
-- [ ] T2 Nested passthrough: F12 (and configurable `passthrough` bind) toggles forwarding of all keys incl. prefix; status bar indicator; which-key mentions `C-b C-b`. Route: delegated.
+- [x] T2 Nested passthrough: F12 (and configurable `passthrough` bind) toggles forwarding of all keys incl. prefix; status bar indicator; which-key mentions `C-b C-b`. Route: delegated.
 - [ ] T3 Mouse drag selection: drag in a pane without mouse-tracking app selects text clamped to that pane, release copies via OSC 52; anchor in absolute history lines. Route: delegated.
 - [ ] T4 Config `bind` keeps full command line. Route: delegated with T1-T3 (single writer).
 
@@ -30,5 +30,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 ## Progress / Evidence
 - T1 done (route: delegated writer). `Server.fitSessions` sizes each viewed session to min cols / min rows of its viewers; called on attach, detach, resize, refresh, session switch, new-session, session emptied. Pointer state moved to per-client `mouseState` (`client.mouse`); `session.mouse` keeps a client-less default. RED observed on old code (3 sizing tests timed out), GREEN after. Tests: `internal/server/multiclient_test.go`. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
 
+- T2 done (route: delegated writer). Client `forwardInput` keeps a passthrough flag toggled by F12 (`\x1b[24~`, intercepted in `escapeKey`), a `passthrough` bind, or `:passthrough`; while on the prefix is forwarded like any byte. New `protocol.TypePassthrough` (N=1/0) tells the server, which stamps a per-client `PASSTHROUGH · F12` pill on a copy of the shared frame (`render.StampStatusRight`). Which-key/session help and README updated. RED observed (4 client tests failed, server test did not compile), GREEN after. Tests: `internal/client/passthrough_test.go`, `TestPassthroughMarksOnlyThatClientsStatusBar`. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
+
 ## Next step
-T2.
+T3.

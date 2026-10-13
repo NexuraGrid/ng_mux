@@ -495,26 +495,61 @@ func drawStatusSegments(f *Frame, segs []StatusSegment, statusFG, statusBG int) 
 		put(Cell{Ch: r, FG: fg, BG: bg, Attr: attr, Width: 1})
 	}
 	for _, seg := range segs {
-		fg, bg := defFG, defBG
-		attr := uint16(vterm.AttrReverse)
-		if seg.FG != InheritColour || seg.BG != InheritColour {
-			// Without reverse, the visible text colour is defBG and the
-			// visible background is defFG.
-			fg, bg, attr = defBG, defFG, 0
-			if seg.FG != InheritColour {
-				fg = uint32(seg.FG)
-			}
-			if seg.BG != InheritColour {
-				bg = uint32(seg.BG)
-			}
-		}
-		attr |= seg.Attr
+		fg, bg, attr := segmentStyle(seg, defFG, defBG)
 		for _, r := range seg.Text {
 			putRune(r, fg, bg, attr)
 		}
 	}
 	for x < f.Cols {
 		put(Cell{Ch: ' ', FG: defFG, BG: defBG, Attr: vterm.AttrReverse})
+	}
+}
+
+// segmentStyle resolves a status segment's cell colours and attributes on a
+// bar whose base colours are defFG/defBG (drawn in reverse video).
+func segmentStyle(seg StatusSegment, defFG, defBG uint32) (fg, bg uint32, attr uint16) {
+	fg, bg = defFG, defBG
+	attr = uint16(vterm.AttrReverse)
+	if seg.FG != InheritColour || seg.BG != InheritColour {
+		// Without reverse, the visible text colour is defBG and the
+		// visible background is defFG.
+		fg, bg, attr = defBG, defFG, 0
+		if seg.FG != InheritColour {
+			fg = uint32(seg.FG)
+		}
+		if seg.BG != InheritColour {
+			bg = uint32(seg.BG)
+		}
+	}
+	return fg, bg, attr | seg.Attr
+}
+
+// StampStatusRight overwrites the right end of f's status row with seg,
+// leaving the last keep columns (the clock) untouched, styled exactly as
+// drawStatusSegments would style it with pal's bar colours. It is used for a
+// per-client marker drawn on top of a frame every viewer shares. A segment
+// that does not fit is clipped on the left edge. Only single-width runes are
+// expected.
+func StampStatusRight(f *Frame, seg StatusSegment, keep int, pal *theme.Palette) {
+	y := f.Rows - 1
+	if y < 0 {
+		return
+	}
+	fg, bg, attr := segmentStyle(seg, uint32(pal.StatusFG), uint32(pal.StatusBG))
+	runes := []rune(seg.Text)
+	x := f.Cols - keep - len(runes)
+	for _, r := range runes {
+		if x >= 0 && x < f.Cols {
+			// Never leave half of a wide glyph behind.
+			if f.at(x, y).Width == 0 && x > 0 && f.at(x-1, y).Width == 2 {
+				f.set(x-1, y, Cell{Ch: ' ', FG: fg, BG: bg, Attr: attr, Width: 1})
+			}
+			f.set(x, y, Cell{Ch: r, FG: fg, BG: bg, Attr: attr, Width: 1})
+		}
+		x++
+	}
+	if x < f.Cols && f.at(x, y).Width == 0 && f.at(x-1, y).Width != 2 {
+		f.set(x, y, Cell{Ch: ' ', FG: fg, BG: bg, Attr: attr, Width: 1})
 	}
 }
 
