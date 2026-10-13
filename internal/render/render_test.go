@@ -87,6 +87,39 @@ func TestPaintDiffOnlyChangedCells(t *testing.T) {
 	}
 }
 
+// Every painted frame, full or diff, is wrapped in synchronized output so a
+// supporting terminal presents it at once instead of half drawn.
+func TestPaintWrapsFrameInSynchronizedOutput(t *testing.T) {
+	pane := func(text string) []PaneView {
+		return []PaneView{{ID: 1, Rect: layout.Rect{X: 0, Y: 0, W: 10, H: 2}, Snap: snapWith(10, 2, text), Active: true}}
+	}
+	f1 := Compose(10, 3, pane("abc"), "s", DefaultStatusStyle)
+	f2 := Compose(10, 3, pane("aXc"), "s", DefaultStatusStyle)
+
+	for _, tt := range []struct {
+		name string
+		out  []byte
+	}{
+		{"full", Paint(nil, f1)},
+		{"diff", Paint(f1, f2)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !bytes.HasPrefix(tt.out, []byte("\x1b[?2026h")) {
+				t.Errorf("paint does not begin a synchronized update: %q", tt.out)
+			}
+			if !bytes.HasSuffix(tt.out, []byte("\x1b[?2026l")) {
+				t.Errorf("paint does not end the synchronized update: %q", tt.out)
+			}
+			if n := bytes.Count(tt.out, []byte("\x1b[?2026")); n != 2 {
+				t.Errorf("paint has %d synchronized-output toggles, want 2", n)
+			}
+		})
+	}
+	if out := Paint(f1, f1); out != nil {
+		t.Errorf("an unchanged frame must still cost no bytes; got %q", out)
+	}
+}
+
 func rowString(f *Frame, y int) string {
 	var b strings.Builder
 	for x := 0; x < f.Cols; x++ {
