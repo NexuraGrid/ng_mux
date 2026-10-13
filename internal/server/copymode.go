@@ -115,10 +115,14 @@ func (c *copyState) selectedText(vt screen) string {
 	if lo > hi {
 		lo, hi = hi, lo
 	}
-	// The window's bottom row is line hi: its offset counts the rows between
-	// hi and the bottom of the live screen.
-	offset := int(int64(c.seen) + int64(c.rows) - 1 - hi)
-	snap := vt.ScrollbackView(offset, int(hi-lo)+1)
+	// The window's bottom row is line hi: below counts the rows between hi
+	// and the bottom of the live screen. ScrollbackView clamps its offset to
+	// the history length, so when hi is on the live screen with less history
+	// than that above it (a fresh or cleared pane), the window instead ends at
+	// the screen bottom and grows downward by the rest; its top stays line lo.
+	below := int(int64(c.seen) + int64(c.rows) - 1 - hi)
+	offset := min(below, vt.HistoryLen())
+	snap := vt.ScrollbackView(offset, int(hi-lo)+1+below-offset)
 	ay := int(c.aLine - lo)
 	cy := int(c.lineAt(c.cy) - lo)
 	return extractText(snap, ax, ay, cx, cy)

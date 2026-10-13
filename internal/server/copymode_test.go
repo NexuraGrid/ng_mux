@@ -155,3 +155,48 @@ func TestAnchoredCopyModeKeepsSelectionOnSameText(t *testing.T) {
 		t.Fatalf("row at cursor drifted from %q to %q after output arrived; anchoring failed", rowBefore, rowAfter)
 	}
 }
+
+// TestSelectedTextWithoutScrollback covers a fresh (or just-cleared) pane: no
+// history yet, and a selection above the bottom row. Reading it must not
+// depend on there being enough scrollback to hold the rows below it.
+func TestSelectedTextWithoutScrollback(t *testing.T) {
+	vt := vterm.New(20, 6, nil)
+	vt.SetHistoryLimit(100)
+	vt.Write([]byte("hello\r\nworld\r\n"))
+	if vt.HistoryLen() != 0 {
+		t.Fatalf("setup pushed %d lines into history; want none", vt.HistoryLen())
+	}
+
+	c := newCopyState(20, 6)
+	c.seen = vt.ScrolledTotal()
+	c.setAnchor(0, 0)
+	c.cx, c.cy = 4, 1
+
+	if got, want := c.selectedText(vt), "hello\nworld"; got != want {
+		t.Fatalf("selectedText = %q, want %q", got, want)
+	}
+}
+
+// TestSelectedTextWithShortScrollback is the same with less history than the
+// rows between the selection and the bottom of the screen.
+func TestSelectedTextWithShortScrollback(t *testing.T) {
+	vt := vterm.New(20, 6, nil)
+	vt.SetHistoryLimit(100)
+	for i := 1; i <= 7; i++ {
+		vt.Write([]byte(fmt.Sprintf("line%02d\r\n", i)))
+	}
+	// 8 rows written on a 6-row screen (7 lines plus the empty last row):
+	// two in history, line03..line07 and the cursor row on screen.
+	if vt.HistoryLen() != 2 {
+		t.Fatalf("history = %d, want 2", vt.HistoryLen())
+	}
+
+	c := newCopyState(20, 6)
+	c.seen = vt.ScrolledTotal()
+	c.setAnchor(0, 0)
+	c.cx, c.cy = 5, 0
+
+	if got, want := c.selectedText(vt), "line03"; got != want {
+		t.Fatalf("selectedText = %q, want %q", got, want)
+	}
+}
