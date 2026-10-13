@@ -331,8 +331,23 @@ func firstLine(s string) string {
 // ':' command prompt), everything else straight to the focused pane. term is
 // the real terminal, used only to size the prefix cheat-sheet popup. escapeDelay
 // is how long a lone Esc waits for the rest of a sequence before being sent.
+//
+// F12 (or a key bound to the passthrough command) toggles passthrough mode:
+// while it is on, every byte — the prefix included — goes to the pane, so a
+// multiplexer running inside a pane (nested tmux or ngmux) gets its own prefix.
+// Only F12 is still intercepted, to turn it back off. The server is told about
+// each change so it can show the mode in this client's status bar.
 func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.Conn, km keymap, pal *theme.Palette, escapeDelay time.Duration, overlay *atomic.Bool) error {
 	prefix := km.prefix
+	pass := false
+	togglePass := func() error {
+		pass = !pass
+		n := 0
+		if pass {
+			n = 1
+		}
+		return pc.Write(protocol.Message{Type: protocol.TypePassthrough, N: n})
+	}
 	for {
 		b, err := br.ReadByte()
 		if err != nil {
@@ -341,11 +356,17 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 
 		switch {
 		case b == 0x1b:
-			if err := handleEscape(br, pc, escapeDelay); err != nil {
+			isF12, err := escapeKey(br, pc, escapeDelay, true)
+			if err != nil {
 				return err
 			}
+			if isF12 {
+				if err := togglePass(); err != nil {
+					return err
+				}
+			}
 
-		case b == prefix:
+		case b == prefix && !pass:
 			// Show the cheat-sheet while we block for the next key, unless the
 			// user already typed it (a buffered byte) — then skip the flash.
 			hide, shown := func() {}, false
@@ -369,7 +390,9 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 			quick, isQuick := quickPrompts[cmd]
 			switch {
 			case cmd == ':':
-				commandPrompt(br, out, pc, linePrompt, settle)
+				if commandPrompt(br, out, pc, linePrompt, settle) == cmdPassthrough {
+					_ = togglePass()
+				}
 			case cmd == prefix:
 				// prefix twice: send one literal prefix byte to the pane.
 				pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{prefix}})
@@ -394,6 +417,12 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 				if !ok {
 					continue
 				}
+				if line == cmdPassthrough {
+					if err := togglePass(); err != nil {
+						return err
+					}
+					continue
+				}
 				pc.Write(protocol.Message{Type: protocol.TypeExec, Name: line})
 				if line == cmdDetach {
 					return errDetached
@@ -407,7 +436,7 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 				if e != nil {
 					break
 				}
-				if nb == prefix || nb == 0x1b {
+				if (nb == prefix && !pass) || nb == 0x1b {
 					br.pushBack(nb)
 					break
 				}
@@ -425,23 +454,33 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 // lone Esc with nothing behind it within escapeDelay is forwarded on its own
 // rather than held until the next keystroke.
 func handleEscape(br *inReader, pc *protocol.Conn, escapeDelay time.Duration) error {
+	_, err := escapeKey(br, pc, escapeDelay, false)
+	return err
+}
+
+// f12Seq is what terminals send for an unmodified F12 key.
+const f12Seq = "\x1b[24~"
+
+// escapeKey is handleEscape that, when interceptF12 is set, does not forward
+// an F12 key but reports it (isF12) for the caller to act on.
+func escapeKey(br *inReader, pc *protocol.Conn, escapeDelay time.Duration, interceptF12 bool) (isF12 bool, err error) {
 	b1, ok := br.ReadByteTimeout(escapeDelay)
 	if !ok {
-		return pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b}})
+		return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b}})
 	}
 	if b1 != '[' {
-		return pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b, b1}})
+		return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b, b1}})
 	}
 	b2, err := br.ReadByte()
 	if err != nil {
-		return pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b, '['}})
+		return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: []byte{0x1b, '['}})
 	}
 	if b2 == '<' { // SGR mouse: ESC [ < Cb ; Cx ; Cy (M|m)
 		var body []byte
 		for {
 			c, e := br.ReadByte()
 			if e != nil {
-				return nil
+				return false, nil
 			}
 			if c == 'M' || c == 'm' {
 				body = append(body, c)
@@ -450,9 +489,9 @@ func handleEscape(br *inReader, pc *protocol.Conn, escapeDelay time.Duration) er
 			body = append(body, c)
 		}
 		if msg, ok := parseSGRMouse(body); ok {
-			return pc.Write(msg)
+			return false, pc.Write(msg)
 		}
-		return nil
+		return false, nil
 	}
 	// Any other CSI: forward ESC [ b2 … up to and including the final byte.
 	seq := []byte{0x1b, '[', b2}
@@ -464,7 +503,10 @@ func handleEscape(br *inReader, pc *protocol.Conn, escapeDelay time.Duration) er
 		seq = append(seq, c)
 		b2 = c
 	}
-	return pc.Write(protocol.Message{Type: protocol.TypeInput, Data: seq})
+	if interceptF12 && string(seq) == f12Seq {
+		return true, nil
+	}
+	return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: seq})
 }
 
 func isCSIFinal(b byte) bool { return b >= 0x40 && b <= 0x7e }
@@ -543,7 +585,10 @@ const promptSettle = 60 * time.Millisecond
 // commandPrompt runs a line editor locally, drawing spec's label and the typed
 // text on the bottom row. Enter sends spec.build of the text (if non-empty),
 // Esc cancels. settle delays the first draw (see promptSettle).
-func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec promptSpec, settle time.Duration) {
+//
+// It returns the command line that was entered. The passthrough command is
+// client-side state, so it is returned without being sent; the caller acts on it.
+func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec promptSpec, settle time.Duration) string {
 	var buf []byte
 	draw := func() { out.WriteString("\x1b[?25h\x1b[999;1H\x1b[2K" + spec.label + string(buf)) }
 	if settle > 0 {
@@ -553,15 +598,16 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 	for {
 		b, err := br.ReadByte()
 		if err != nil {
-			return
+			return ""
 		}
 		switch b {
 		case '\r', '\n':
-			if line := spec.build(string(buf)); line != "" {
+			line := strings.TrimSpace(spec.build(string(buf)))
+			if line != "" && line != cmdPassthrough {
 				pc.Write(protocol.Message{Type: protocol.TypeExec, Name: line})
 			}
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
-			return
+			return line
 		case 0x1b: // Esc: cancel (swallow a following arrow-key body if any)
 			for br.Buffered() > 0 {
 				if nb, _ := br.ReadByte(); isCSIFinal(nb) {
@@ -569,7 +615,7 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 				}
 			}
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
-			return
+			return ""
 		case 0x7f, 0x08:
 			if len(buf) > 0 {
 				buf = buf[:len(buf)-1]
@@ -587,6 +633,11 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 // cmdDetach is the one command line the input loop reacts to locally: after
 // sending it the client stops reading input and lets Attach return.
 const cmdDetach = "detach-client"
+
+// cmdPassthrough toggles passthrough mode (see forwardInput). It is handled by
+// the client and never sent to the server. F12 does the same without the
+// prefix; `bind <key> passthrough` puts it on a prefix key too.
+const cmdPassthrough = "passthrough"
 
 // defaultKeyCommands maps the key pressed after the prefix to the command line
 // sent to the server. Digits 0-9 (select-window) and the arrow keys are handled

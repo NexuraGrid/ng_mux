@@ -54,10 +54,9 @@ type session struct {
 	nextPaneID   layout.PaneID
 	nextWindowID int
 
-	cols, rows int // viewport of the attached client(s); rows includes status
+	cols, rows int // viewport: the smallest attached client (see Server.fitSessions); rows includes status
 
 	pasteBuf   string      // last copy-mode yank; target of the paste command
-	drag       dragState   // in-progress mouse border drag
 	statusHits []statusHit // clickable status-bar regions, rebuilt each frame
 
 	// tabScratch / tabWidths are buildStatus's per-frame tab texts and their
@@ -65,13 +64,9 @@ type session struct {
 	tabScratch []string
 	tabWidths  []int
 
-	// mouseFwd is the pane a press started forwarding mouse reports to (0
-	// when no forwarded press is in progress). It is set by routePress and
-	// consulted by routeDrag/routeRelease so a drag or release that strays
-	// off the pane's rectangle (or off any pane at all) still reaches the
-	// same app the press did, matching how a real terminal tracks a button
-	// once it goes down.
-	mouseFwd layout.PaneID
+	// mouseDefault is the pointer state used by mouse(), the client-less
+	// entry point. Attached clients keep their own (see mouseState).
+	mouseDefault mouseState
 
 	// needsRepaint forces the next frame even if no pane produced output
 	// (a command changed focus, layout, a window name, ...). frame() clears it.
@@ -316,17 +311,21 @@ func (s *session) removeWindowAt(i int) {
 	}
 }
 
-func (s *session) resize(cols, rows int) {
+// resize sets the session's viewport and relays every window out to it. It
+// reports whether the size actually changed.
+func (s *session) resize(cols, rows int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cols <= 0 || rows <= 0 || (cols == s.cols && rows == s.rows) {
-		return
+		return false
 	}
 	s.cols, s.rows = cols, rows
+	s.needsRepaint = true
 	content := s.contentRows()
 	for _, w := range s.windows {
 		w.applyLayout(cols, content)
 	}
+	return true
 }
 
 // input routes raw bytes: to the focused pane's copy-mode scroller if it is in

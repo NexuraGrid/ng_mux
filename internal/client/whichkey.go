@@ -68,6 +68,7 @@ var builtinWhichKey = []whichKeySection{
 	{"Other", []whichKeyRow{
 		{":", "command prompt"},
 		{whichKeyPrefixKey, "send a literal prefix"},
+		{"F12", "passthrough on / off"},
 	}},
 }
 

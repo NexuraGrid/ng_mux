@@ -29,6 +29,7 @@ const (
 	TypeListReq     Type = "list_req"     // request the session list
 	TypeKillServer  Type = "kill_server"  // shut the server down
 	TypeKillSession Type = "kill_session" // kill one session; carries Name
+	TypePassthrough Type = "passthrough"  // client passthrough mode changed; N = 1 on, 0 off
 
 	// Server -> client.
 	TypeFrame        Type = "frame"         // pre-rendered ANSI screen update; carries Data

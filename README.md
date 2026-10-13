@@ -38,9 +38,14 @@ Working now:
 - **preset layouts**: `select-layout even-horizontal | even-vertical | tiled |
   main-vertical | main-horizontal`
 - **rename** windows and sessions (`Ctrl-b ,` / `Ctrl-b $`)
+- **nested tmux**: `Ctrl-b Ctrl-b` sends a literal prefix, `F12` toggles a
+  passthrough mode that sends every key to the pane
 - **mouse** (on by default; `set mouse off` to disable): click a pane to focus
-  it, drag a border to resize, wheel to scroll history, click a window name or
-  the `[+]` button in the status bar
+  it, drag inside a pane to select and copy its text (only that pane's text,
+  straight to the clipboard via OSC 52 and the paste buffer), drag a border to
+  resize, wheel to scroll history, click a window name or the `[+]` button in
+  the status bar. Apps that ask for the mouse (vim, htop, …) get the drag
+  instead; hold Shift for your terminal's own selection there
 - status bar: session name, window list with the active marker, clock
 - kill a pane; detach and re-attach
 - `ngmux ls`, `ngmux kill-session -t name`, `ngmux kill-server`
@@ -168,10 +173,32 @@ Prefix is **Ctrl-b** (same as tmux).
 | `Ctrl-b :`      | command prompt             |
 | `Ctrl-b d`      | detach                     |
 | `Ctrl-b Ctrl-b` | send a literal Ctrl-b      |
+| `F12`           | passthrough mode on / off (no prefix needed) |
+
+### Nested multiplexers (tmux or ngmux inside a pane)
+
+Running tmux (or another ngmux) inside an ngmux pane, both want `Ctrl-b`. Two
+ways to reach the inner one:
+
+- `Ctrl-b Ctrl-b` sends one literal `Ctrl-b` to the pane, so `Ctrl-b Ctrl-b c`
+  is the inner multiplexer's `Ctrl-b c`.
+- `F12` turns on **passthrough**: every key, the prefix included, goes straight
+  to the pane, and the status bar shows a `PASSTHROUGH · F12` pill. Press `F12`
+  again to get the outer ngmux back. The mode belongs to your client only; other
+  clients attached to the same session are unaffected. To put it on a prefix key
+  as well, add `bind P passthrough` to the config (or type `Ctrl-b :
+  passthrough`).
+
+Alternatively give the outer ngmux a different prefix (`set prefix C-a`).
 
 In copy-mode: arrows / PageUp / PageDown move and scroll, `g` / `G` jump to the
 oldest / newest line, `Space` starts a selection, `Enter` or `y` copies it and
 exits, `Esc` or `q` exits.
+
+With the mouse on, a plain drag inside a pane selects text in that pane only
+(the selection stops at the pane's border) and releasing copies it, like `y` in
+copy-mode; a click without a drag just focuses. This also works after scrolling
+back with the wheel.
 
 To pull a pane back in from another window, `Ctrl-b : join-pane -s N` (add `-h`
 for a left/right split); it is the inverse of `Ctrl-b !`.
@@ -202,7 +229,11 @@ set theme dark
 set pane-titles on
 bind s split-vertical
 bind v split-horizontal
+bind S split-window -v
+bind P passthrough
 ```
+
+A `bind` takes the rest of the line as the command, arguments included.
 
 `escape-time` is how many milliseconds a lone `Esc` waits for the rest of an
 escape sequence before it is sent on its own (default 25). Raise it on a slow

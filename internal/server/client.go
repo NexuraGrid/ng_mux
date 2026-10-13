@@ -7,6 +7,7 @@ import (
 
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
 	"github.com/MauricioJC3/ng_mux/internal/render"
+	"github.com/MauricioJC3/ng_mux/internal/theme"
 )
 
 const (
@@ -53,6 +54,18 @@ type client struct {
 	sess     string       // name of the session this client is currently viewing
 	cols     int          // last terminal size this client reported
 	rows     int
+
+	// passthrough mirrors the client's passthrough mode (all keys, prefix
+	// included, go to the pane). It only changes what this client's status
+	// bar shows: a marker stamped onto a copy of the shared frame, using pal.
+	passthrough bool
+	pal         *theme.Palette
+	stamped     render.Frame // scratch for the stamped copy
+
+	// mouse is this client's in-progress pointer interaction. It is read and
+	// written only by the client's own serveClient goroutine, under the lock
+	// of the session the event is routed to.
+	mouse mouseState
 }
 
 func newClient(pc *protocol.Conn, session string) *client {
@@ -140,6 +153,9 @@ func (c *client) offerFrame(frame *render.Frame) {
 		c.stale = true
 		return
 	}
+	if c.passthrough {
+		frame = c.stampPassthrough(frame)
+	}
 	var prev *render.Frame
 	if c.hasShown {
 		prev = &c.shown
@@ -156,6 +172,46 @@ func (c *client) offerFrame(frame *render.Frame) {
 	case c.frameReady <- struct{}{}:
 	default:
 	}
+}
+
+// passthroughMarker is the status-bar pill a client in passthrough mode sees.
+// F12 is the key that turns the mode off again.
+const passthroughMarker = " PASSTHROUGH · F12 "
+
+// clockCols is the width of the status bar's clock (" 15:04 "), which the
+// passthrough marker is drawn just left of.
+const clockCols = 7
+
+// stampPassthrough returns a copy of frame with the passthrough marker on its
+// status row. Caller holds c.mu.
+func (c *client) stampPassthrough(frame *render.Frame) *render.Frame {
+	pal := c.pal
+	if pal == nil {
+		d := theme.Dark()
+		pal = &d
+	}
+	c.stamped.CopyFrom(frame)
+	render.StampStatusRight(&c.stamped, render.StatusSegment{
+		Text: passthroughMarker, FG: pal.Mode.FG, BG: pal.Mode.BG, Attr: pal.Mode.Attr,
+	}, clockCols, pal)
+	return &c.stamped
+}
+
+// setPassthrough records the client's passthrough mode and asks for a frame
+// so the marker appears (or disappears) on the next tick.
+func (c *client) setPassthrough(on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.passthrough != on {
+		c.passthrough = on
+		c.stale = true
+	}
+}
+
+func (c *client) passthroughOn() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.passthrough
 }
 
 // takeFrame moves the pending frame to the writer and marks it busy.

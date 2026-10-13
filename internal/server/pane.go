@@ -178,8 +178,7 @@ func (p *pane) copyKey(data []byte) (yank string, exited bool) {
 	p.syncCopy()
 	exit, doYank := cs.key(data, p.vt.HistoryLen())
 	if doYank {
-		snap := p.vt.ScrollbackView(cs.offset, cs.rows)
-		yank = extractText(snap, cs.ax, cs.ay, cs.cx, cs.cy)
+		yank = cs.selectedText(p.vt)
 	}
 	if exit {
 		p.copy = nil

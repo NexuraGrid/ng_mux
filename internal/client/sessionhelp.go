@@ -25,6 +25,8 @@ var sessionHelp = []sessionHelpRow{
 	{"rename", "Ctrl-b $   (asks for a name)"},
 	{"detach", "Ctrl-b d   (keeps it running)"},
 	{"kill", "ngmux kill-session -t NAME"},
+	{"nested", "Ctrl-b Ctrl-b sends Ctrl-b inside"},
+	{"passthrough", "F12   (every key to the pane; F12 again)"},
 }
 
 const sessionHelpTitle = "sessions"
