@@ -28,7 +28,29 @@ type copyState struct {
 	cx, cy int // copy cursor, in viewport coordinates
 
 	hasSel bool
-	ax, ay int // selection anchor, viewport coordinates
+	ax     int   // selection anchor column
+	aLine  int64 // selection anchor line, as an absolute line number (see lineAt)
+}
+
+// lineAt converts viewport row y to an absolute line number: the count of
+// lines ever pushed into history (seen) plus the row's position relative to
+// the top of the live screen. Scrolling the view (offset) or a sync (which
+// moves seen and offset together) leaves a given line's number unchanged, so
+// an anchor stored this way stays on the same text. Callers sync first.
+func (c *copyState) lineAt(y int) int64 {
+	return int64(c.seen) + int64(y) - int64(c.offset)
+}
+
+// rowOf is lineAt's inverse: the viewport row showing absolute line n, which
+// may be outside [0, rows) when that line is scrolled out of view.
+func (c *copyState) rowOf(n int64) int {
+	return int(n - int64(c.seen) + int64(c.offset))
+}
+
+// setAnchor starts a selection at viewport cell (x, y).
+func (c *copyState) setAnchor(x, y int) {
+	c.hasSel = true
+	c.ax, c.aLine = x, c.lineAt(y)
 }
 
 func newCopyState(cols, rows int) *copyState {
@@ -69,7 +91,37 @@ func (c *copyState) selection() *render.Selection {
 	if !c.hasSel {
 		return nil
 	}
-	return &render.Selection{X0: c.ax, Y0: c.ay, X1: c.cx, Y1: c.cy}
+	ax, ay := c.ax, c.rowOf(c.aLine)
+	// An anchor scrolled out of view: the selection runs to the edge of the
+	// viewport on that side.
+	switch {
+	case ay < 0:
+		ax, ay = 0, 0
+	case ay >= c.rows:
+		ax, ay = c.cols-1, c.rows-1
+	}
+	return &render.Selection{X0: ax, Y0: ay, X1: c.cx, Y1: c.cy}
+}
+
+// selectedText extracts the selection, anchor to cursor, from vt. The anchor
+// may be scrolled out of view, so it reads one scrollback window spanning
+// both ends rather than just the visible rows. Callers sync first.
+func (c *copyState) selectedText(vt screen) string {
+	if !c.hasSel {
+		return ""
+	}
+	lo, hi := c.aLine, c.lineAt(c.cy)
+	ax, cx := c.ax, c.cx
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	// The window's bottom row is line hi: its offset counts the rows between
+	// hi and the bottom of the live screen.
+	offset := int(int64(c.seen) + int64(c.rows) - 1 - hi)
+	snap := vt.ScrollbackView(offset, int(hi-lo)+1)
+	ay := int(c.aLine - lo)
+	cy := int(c.lineAt(c.cy) - lo)
+	return extractText(snap, ax, ay, cx, cy)
 }
 
 func (c *copyState) cursor() *[2]int { return &[2]int{c.cx, c.cy} }
@@ -89,8 +141,7 @@ func (c *copyState) key(data []byte, histLen int) (exit, yank bool) {
 		c.offset = 0
 		c.cy = c.rows - 1
 	case bytes.Equal(data, []byte(" ")):
-		c.hasSel = true
-		c.ax, c.ay = c.cx, c.cy
+		c.setAnchor(c.cx, c.cy)
 	case bytes.Equal(data, []byte{0x0d}), bytes.Equal(data, []byte("\n")), bytes.Equal(data, []byte("y")):
 		return true, c.hasSel
 

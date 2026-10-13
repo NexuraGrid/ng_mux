@@ -41,8 +41,11 @@ Working now:
 - **nested tmux**: `Ctrl-b Ctrl-b` sends a literal prefix, `F12` toggles a
   passthrough mode that sends every key to the pane
 - **mouse** (on by default; `set mouse off` to disable): click a pane to focus
-  it, drag a border to resize, wheel to scroll history, click a window name or
-  the `[+]` button in the status bar
+  it, drag inside a pane to select and copy its text (only that pane's text,
+  straight to the clipboard via OSC 52 and the paste buffer), drag a border to
+  resize, wheel to scroll history, click a window name or the `[+]` button in
+  the status bar. Apps that ask for the mouse (vim, htop, …) get the drag
+  instead; hold Shift for your terminal's own selection there
 - status bar: session name, window list with the active marker, clock
 - kill a pane; detach and re-attach
 - `ngmux ls`, `ngmux kill-session -t name`, `ngmux kill-server`
@@ -191,6 +194,11 @@ Alternatively give the outer ngmux a different prefix (`set prefix C-a`).
 In copy-mode: arrows / PageUp / PageDown move and scroll, `g` / `G` jump to the
 oldest / newest line, `Space` starts a selection, `Enter` or `y` copies it and
 exits, `Esc` or `q` exits.
+
+With the mouse on, a plain drag inside a pane selects text in that pane only
+(the selection stops at the pane's border) and releasing copies it, like `y` in
+copy-mode; a click without a drag just focuses. This also works after scrolling
+back with the wheel.
 
 To pull a pane back in from another window, `Ctrl-b : join-pane -s N` (add `-h`
 for a left/right split); it is the inverse of `Ctrl-b !`.

@@ -34,23 +34,38 @@ type mouseState struct {
 	// the press did, matching how a real terminal tracks a button once it
 	// goes down.
 	fwd layout.PaneID
+
+	// sel is the pane a left press may start a drag selection in (0 when
+	// none): a pane whose app did not ask for mouse reports. selX/selY is the
+	// pressed cell, pane-local. selActive is set once the pointer has moved
+	// off that cell and the selection is showing (as copy-mode).
+	sel        layout.PaneID
+	selX, selY int
+	selActive  bool
+
+	// copied is the text the last release copied, handed back by mouseAs.
+	copied string
 }
 
 // mouse handles one mouse event (coordinates are 0-based cells) using the
 // session's own pointer state, for callers with no client (tests, scripts).
 // It returns true when the client needs a repaint.
 func (s *session) mouse(kind string, x, y, button int) bool {
-	return s.mouseAs(&s.mouseDefault, kind, x, y, button)
+	repaint, _ := s.mouseAs(&s.mouseDefault, kind, x, y, button)
+	return repaint
 }
 
 // mouseAs handles one mouse event on behalf of the client owning ms. It
-// returns true when the client needs a repaint.
-func (s *session) mouseAs(ms *mouseState, kind string, x, y, button int) bool {
+// returns true when the client needs a repaint, and the text a finished drag
+// selection copied (empty otherwise) for the caller to mirror to the
+// client's clipboard.
+func (s *session) mouseAs(ms *mouseState, kind string, x, y, button int) (repaint bool, yanked string) {
 	p, data, repaint := s.routeMouse(ms, kind, x, y, button)
 	if p != nil && len(data) > 0 {
 		_, _ = p.pt.Write(data)
 	}
-	return repaint
+	yanked, ms.copied = ms.copied, ""
+	return repaint, yanked
 }
 
 // routeMouse is mouse's locked half: it decides what an event means — focus,
@@ -72,6 +87,15 @@ func (s *session) routeMouse(ms *mouseState, kind string, x, y, button int) (p *
 		return nil, nil, false
 	}
 	cols, content := s.cols, s.contentRows()
+	// While a button is held for a drag selection, a border drag or an app,
+	// motion and the release may wander onto the status row or past the
+	// session's edge (a client bigger than the session): keep them, clamped
+	// to the content area, so the gesture always ends where it started.
+	if (kind == protocol.MouseDrag || kind == protocol.MouseRelease) &&
+		(ms.sel != 0 || ms.fwd != 0 || ms.drag.active) {
+		x = max(0, min(x, cols-1))
+		y = max(0, min(y, content-1))
+	}
 	if x < 0 || y < 0 || x >= cols {
 		return nil, nil, false
 	}
@@ -161,6 +185,7 @@ func (s *session) routeWheel(w *window, rects map[layout.PaneID]layout.Rect, col
 func (s *session) routePress(ms *mouseState, w *window, rects map[layout.PaneID]layout.Rect, cols, content, x, y, button int) (*pane, []byte, bool) {
 	ms.drag = dragState{}
 	ms.fwd = 0
+	ms.sel, ms.selActive = 0, false
 
 	id := w.hitPane(rects, x, y)
 	if id == 0 {
@@ -189,7 +214,71 @@ func (s *session) routePress(ms *mouseState, w *window, rects map[layout.PaneID]
 			}
 		}
 	}
+	// A left press on a pane whose app is not tracking the mouse (or one
+	// already in copy-mode) may become a drag selection. Nothing happens
+	// until the pointer moves, so a plain click only focuses.
+	if button == 0 && (p.copy != nil || !wantsMouseTracking(p.vt.InputModes())) {
+		ms.sel = id
+		ms.selX, ms.selY = localCoords(w.rectOf(rects, cols, content, id), x, y)
+	}
 	return nil, nil, focusChanged
+}
+
+// dragSelect extends a drag selection to (x,y), clamped to the rectangle of
+// the pane the press landed on so it never picks up a neighbour's cells. The
+// first move off the pressed cell shows the selection by putting that pane in
+// copy-mode (if it was not already) anchored at the pressed cell.
+func (s *session) dragSelect(ms *mouseState, w *window, rects map[layout.PaneID]layout.Rect, cols, content, x, y int) (*pane, []byte, bool) {
+	p := w.panes[ms.sel]
+	if p == nil {
+		ms.sel, ms.selActive = 0, false
+		return nil, nil, false
+	}
+	lx, ly := localCoords(w.rectOf(rects, cols, content, ms.sel), x, y)
+	if !ms.selActive {
+		if lx == ms.selX && ly == ms.selY {
+			return nil, nil, false
+		}
+		w.enterCopyPane(ms.sel, cols, content) // no-op if already in copy-mode
+		if p.copy == nil {
+			ms.sel = 0
+			return nil, nil, false
+		}
+		p.syncCopy()
+		p.copy.setAnchor(min(ms.selX, p.copy.cols-1), min(ms.selY, p.copy.rows-1))
+		ms.selActive = true
+	}
+	if p.copy == nil { // left copy-mode some other way (a key) mid-drag
+		ms.sel, ms.selActive = 0, false
+		return nil, nil, true
+	}
+	p.syncCopy()
+	p.copy.cx, p.copy.cy = min(lx, p.copy.cols-1), min(ly, p.copy.rows-1)
+	return nil, nil, true
+}
+
+// finishSelect ends a drag selection on release: the selected text goes to
+// the paste buffer and to ms.copied (for the client's clipboard), and the
+// pane leaves copy-mode, as a copy-mode yank does. A press that never moved
+// was a click and copies nothing. Caller holds mu.
+func (s *session) finishSelect(ms *mouseState, w *window) bool {
+	id, active := ms.sel, ms.selActive
+	ms.sel, ms.selActive = 0, false
+	if !active {
+		return false
+	}
+	p := w.panes[id]
+	if p == nil || p.copy == nil {
+		return true
+	}
+	p.syncCopy()
+	text := p.copy.selectedText(p.vt)
+	p.copy = nil
+	if text != "" {
+		s.pasteBuf = text
+		ms.copied = text
+	}
+	return true
 }
 
 // routeDrag continues a border-resize drag, or forwards pointer motion to the
@@ -199,6 +288,9 @@ func (s *session) routePress(ms *mouseState, w *window, rects map[layout.PaneID]
 // localCoords, so straying off it while the button is held still reports
 // something the app can use, matching a real terminal.
 func (s *session) routeDrag(ms *mouseState, w *window, rects map[layout.PaneID]layout.Rect, cols, content, x, y, button int) (*pane, []byte, bool) {
+	if ms.sel != 0 {
+		return s.dragSelect(ms, w, rects, cols, content, x, y)
+	}
 	if ms.fwd != 0 {
 		p := w.panes[ms.fwd]
 		if p == nil || p.copy != nil {
@@ -235,10 +327,13 @@ func (s *session) routeDrag(ms *mouseState, w *window, rects map[layout.PaneID]l
 	return nil, nil, true
 }
 
-// routeRelease ends a border drag, and forwards the release to the pane a
+// routeRelease ends a border drag or a drag selection (copying it), and forwards the release to the pane a
 // press started forwarding to, if its mode still reports release.
 func (s *session) routeRelease(ms *mouseState, w *window, rects map[layout.PaneID]layout.Rect, cols, content, x, y, button int) (*pane, []byte, bool) {
 	ms.drag = dragState{}
+	if ms.sel != 0 {
+		return nil, nil, s.finishSelect(ms, w)
+	}
 	if ms.fwd == 0 {
 		return nil, nil, false
 	}

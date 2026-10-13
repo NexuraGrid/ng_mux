@@ -17,7 +17,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 ## Tasks
 - [x] T1 Multi-client sizing: session size = smallest attached client; recompute on attach/detach/resize/refresh; per-client mouse state. Route: delegated (multi-file server). 
 - [x] T2 Nested passthrough: F12 (and configurable `passthrough` bind) toggles forwarding of all keys incl. prefix; status bar indicator; which-key mentions `C-b C-b`. Route: delegated.
-- [ ] T3 Mouse drag selection: drag in a pane without mouse-tracking app selects text clamped to that pane, release copies via OSC 52; anchor in absolute history lines. Route: delegated.
+- [x] T3 Mouse drag selection: drag in a pane without mouse-tracking app selects text clamped to that pane, release copies via OSC 52; anchor in absolute history lines. Route: delegated.
 - [ ] T4 Config `bind` keeps full command line. Route: delegated with T1-T3 (single writer).
 
 ## Acceptance criteria
@@ -32,5 +32,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 
 - T2 done (route: delegated writer). Client `forwardInput` keeps a passthrough flag toggled by F12 (`\x1b[24~`, intercepted in `escapeKey`), a `passthrough` bind, or `:passthrough`; while on the prefix is forwarded like any byte. New `protocol.TypePassthrough` (N=1/0) tells the server, which stamps a per-client `PASSTHROUGH · F12` pill on a copy of the shared frame (`render.StampStatusRight`). Which-key/session help and README updated. RED observed (4 client tests failed, server test did not compile), GREEN after. Tests: `internal/client/passthrough_test.go`, `TestPassthroughMarksOnlyThatClientsStatusBar`. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
 
+- T3 done (route: delegated writer). Left press on a pane without mouse tracking (or already in copy-mode) arms a per-client drag selection; first move off the pressed cell enters copy-mode on that pane and anchors there; drag is clamped to the pane rect (`localCoords`); release copies (`copyState.selectedText`), stores the paste buffer, sends OSC 52 via `Server.sendClipboard`, exits copy-mode. Click without drag only focuses. Held-button drag/release events are clamped into the content area so a release on the status row still ends the gesture. Copy-mode anchor now stored as an absolute line (`aLine`, ScrolledTotal-based) so it survives scrolling; extraction reads a scrollback window spanning both ends. RED observed (2 drag tests + anchor test failed), GREEN after. Tests: `internal/server/mouse_select_test.go`. Existing TestDragForwardingRespectsTrackingMode / TestBorderDragStillResizesPanes / TestWheelOnPlainShellEntersCopyMode green. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
+
 ## Next step
-T3.
+T4.

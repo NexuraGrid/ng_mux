@@ -344,11 +344,7 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 		case protocol.TypeInput:
 			if cur != nil {
 				repaint, yank := cur.input(msg.Data)
-				if yank != "" && s.opts.setClipboard {
-					if seq := osc52(yank); seq != nil {
-						cl.send(protocol.Message{Type: protocol.TypeSetClipboard, Data: seq})
-					}
-				}
+				s.sendClipboard(cl, yank)
 				if repaint {
 					s.markDirty(cur)
 					cl.reset()
@@ -364,7 +360,12 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 		case protocol.TypePassthrough:
 			cl.setPassthrough(msg.N != 0)
 		case protocol.TypeMouse:
-			if cur != nil && cur.mouseAs(&cl.mouse, msg.Name, msg.MX, msg.MY, msg.MB) {
+			if cur == nil {
+				break
+			}
+			repaint, yank := cur.mouseAs(&cl.mouse, msg.Name, msg.MX, msg.MY, msg.MB)
+			s.sendClipboard(cl, yank)
+			if repaint {
 				s.markDirty(cur)
 				cl.reset()
 			}
@@ -393,6 +394,17 @@ func (s *Server) serveClient(pc *protocol.Conn, attach protocol.Message) {
 			s.quit()
 			return
 		}
+	}
+}
+
+// sendClipboard mirrors copied text to cl's terminal clipboard with OSC 52,
+// unless set-clipboard is off or there is nothing to copy.
+func (s *Server) sendClipboard(cl *client, text string) {
+	if text == "" || !s.opts.setClipboard {
+		return
+	}
+	if seq := osc52(text); seq != nil {
+		cl.send(protocol.Message{Type: protocol.TypeSetClipboard, Data: seq})
 	}
 }
 

@@ -204,12 +204,17 @@ func (w *window) resizeActive(dir layout.Orientation, delta, cols, rows int) {
 
 // enterCopy puts the active pane into copy-mode sized to its current rectangle.
 func (w *window) enterCopy(cols, rows int) {
-	p := w.panes[w.active]
+	w.enterCopyPane(w.active, cols, rows)
+}
+
+// enterCopyPane puts pane id into copy-mode sized to its current rectangle.
+func (w *window) enterCopyPane(id layout.PaneID, cols, rows int) {
+	p := w.panes[id]
 	if p == nil || p.copy != nil {
 		return
 	}
-	r := layout.Compute(w.tree, w.outer(cols, rows))[w.active]
-	if w.zoom == w.active {
+	r := layout.Compute(w.tree, w.outer(cols, rows))[id]
+	if w.zoom == id {
 		r = w.full(cols, rows) // the zoomed pane owns the whole content area
 	}
 	p.copy = newCopyState(max1(r.W), max1(r.H))
