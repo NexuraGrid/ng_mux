@@ -37,4 +37,4 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 - T4 done, commit `e8bb8ac` (route: delegated writer). `bind` keeps `strings.Join(fields[2:], " ")`; README config example shows `bind S split-window -v` and `bind P passthrough`. RED observed (S and R binds truncated), GREEN after. Test: `TestBindKeepsFullCommandLine`. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
 
 ## Next step
-All tasks done. Pending: user review / native review decision, push and PR (human decisions).
+All tasks done. Native review (medium risk, consent granted, 1 reliability lens) approved and acknowledged, lineage `review-b3c2494532047832`. Advisory follow-ups (non-blocking): R3-fit-race (fitSessions unlocks before resize), R3-resize-no-markdirty, R3-prompt-trim, R3-switch-mouse-reset-partial, R3-vacuous-perclient-test; R3-stamp-narrow-oob checked: false positive, `Frame.at/set` are bounds-checked. Pending: push, PR and release (human decisions).
