@@ -229,7 +229,11 @@ set theme dark
 set pane-titles on
 bind s split-vertical
 bind v split-horizontal
+bind S split-window -v
+bind P passthrough
 ```
+
+A `bind` takes the rest of the line as the command, arguments included.
 
 `escape-time` is how many milliseconds a lone `Esc` waits for the rest of an
 escape sequence before it is sent on its own (default 25). Raise it on a slow

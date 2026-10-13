@@ -18,7 +18,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 - [x] T1 Multi-client sizing: session size = smallest attached client; recompute on attach/detach/resize/refresh; per-client mouse state. Route: delegated (multi-file server). 
 - [x] T2 Nested passthrough: F12 (and configurable `passthrough` bind) toggles forwarding of all keys incl. prefix; status bar indicator; which-key mentions `C-b C-b`. Route: delegated.
 - [x] T3 Mouse drag selection: drag in a pane without mouse-tracking app selects text clamped to that pane, release copies via OSC 52; anchor in absolute history lines. Route: delegated.
-- [ ] T4 Config `bind` keeps full command line. Route: delegated with T1-T3 (single writer).
+- [x] T4 Config `bind` keeps full command line. Route: delegated with T1-T3 (single writer).
 
 ## Acceptance criteria
 - Two clients of different sizes both render correctly; detaching the smaller grows the session back.
@@ -34,5 +34,7 @@ Fix user-reported issues: a second client corrupts the first, nested tmux can't 
 
 - T3 done (route: delegated writer). Left press on a pane without mouse tracking (or already in copy-mode) arms a per-client drag selection; first move off the pressed cell enters copy-mode on that pane and anchors there; drag is clamped to the pane rect (`localCoords`); release copies (`copyState.selectedText`), stores the paste buffer, sends OSC 52 via `Server.sendClipboard`, exits copy-mode. Click without drag only focuses. Held-button drag/release events are clamped into the content area so a release on the status row still ends the gesture. Copy-mode anchor now stored as an absolute line (`aLine`, ScrolledTotal-based) so it survives scrolling; extraction reads a scrollback window spanning both ends. RED observed (2 drag tests + anchor test failed), GREEN after. Tests: `internal/server/mouse_select_test.go`. Existing TestDragForwardingRespectsTrackingMode / TestBorderDragStillResizesPanes / TestWheelOnPlainShellEntersCopyMode green. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
 
+- T4 done (route: delegated writer). `bind` keeps `strings.Join(fields[2:], " ")`; README config example shows `bind S split-window -v` and `bind P passthrough`. RED observed (S and R binds truncated), GREEN after. Test: `TestBindKeepsFullCommandLine`. Checks: go build/vet OK, `go test ./...` OK, `-race` server+client OK.
+
 ## Next step
-T4.
+All tasks done. Pending: user review / native review decision, push and PR (human decisions).

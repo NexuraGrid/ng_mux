@@ -47,7 +47,7 @@ type Config struct {
 	SetClipboard bool              // copy-mode yank also sets the OS clipboard via OSC 52
 	Theme        string            // palette name for all chrome: dark, light or mono
 	PaneTitles   bool              // a title line above each pane of a split window
-	Binds        map[string]string // key (single rune) -> command name
+	Binds        map[string]string // key (single rune) -> command line (with its arguments)
 	Colours      map[string]int    // per-element colour key (see colourKeys) -> colour
 
 	// Warnings holds human-readable notes about lines that were ignored.
@@ -233,7 +233,8 @@ func (c *Config) apply(fields []string) error {
 		if len([]rune(key)) != 1 {
 			return fmt.Errorf("bind key must be a single character, got %q", key)
 		}
-		c.Binds[key] = fields[2]
+		// Keep the whole command line: `bind S split-window -v` must keep -v.
+		c.Binds[key] = strings.Join(fields[2:], " ")
 		return nil
 	default:
 		return fmt.Errorf("unknown directive %q", fields[0])

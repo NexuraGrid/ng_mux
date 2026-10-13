@@ -403,3 +403,27 @@ func TestResolvePath(t *testing.T) {
 		})
 	}
 }
+
+// A bind keeps the whole command line, arguments included, so
+// `bind S split-window -v` binds the vertical split, not a bare split-window.
+func TestBindKeepsFullCommandLine(t *testing.T) {
+	p := writeConf(t, `
+bind S split-window -v
+bind R   resize-pane   -L   5
+bind P passthrough
+`)
+	cfg, err := LoadFile(p)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	want := map[string]string{
+		"S": "split-window -v",
+		"R": "resize-pane -L 5",
+		"P": "passthrough",
+	}
+	for k, v := range want {
+		if got := cfg.Binds[k]; got != v {
+			t.Errorf("bind %s = %q, want %q", k, got, v)
+		}
+	}
+}
