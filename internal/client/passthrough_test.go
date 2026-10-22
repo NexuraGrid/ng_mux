@@ -19,13 +19,20 @@ import (
 // "pass:<on|off>". Refreshes are dropped; they are repaint plumbing.
 func runInputEvents(t *testing.T, km keymap, keys string) []string {
 	t.Helper()
+	return runInputEventsFrom(t, km, strings.NewReader(keys))
+}
+
+// runInputEventsFrom is runInputEvents reading keys from r, so a test can
+// control when they arrive.
+func runInputEventsFrom(t *testing.T, km keymap, r io.Reader) []string {
+	t.Helper()
 	term, err := os.CreateTemp(t.TempDir(), "term") // not a tty: no popup is drawn
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer term.Close()
 
-	ir := newInReader(strings.NewReader(keys))
+	ir := newInReader(r)
 	defer ir.close()
 	cli, srv := net.Pipe()
 	defer srv.Close()

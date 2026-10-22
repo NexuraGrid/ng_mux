@@ -554,3 +554,18 @@ func TestDetachStopsClient(t *testing.T) {
 	// Re-fill cliErr so cleanup's receive does not block.
 	h.cliErr <- nil
 }
+
+// TestBracketedPasteEndToEnd: the client turns bracketed paste on in the real
+// terminal, so pastes arrive marked; a shell that never asked for it (plain
+// sh) gets just the pasted text, with no stray "[200~" echoed back.
+func TestBracketedPasteEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	if !h.waitFor("\x1b[?2004h", 3*time.Second) {
+		t.Fatalf("client never enabled bracketed paste on the terminal; got:\n%q", h.screen())
+	}
+	h.send("\x1b[200~echo pasted-$((40+2))\x1b[201~\r")
+	if !h.waitFor("pasted-42", 3*time.Second) {
+		t.Fatalf("paste did not run; got:\n%q", h.screen())
+	}
+	h.refute("200~", 200*time.Millisecond)
+}

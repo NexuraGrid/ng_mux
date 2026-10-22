@@ -392,6 +392,8 @@ func (t *Term) InputModes() InputModes {
 		MouseSGR:    m&vt10x.ModeMouseSgr != 0,
 		AltScreen:   m&vt10x.ModeAltScreen != 0,
 		AppCursor:   m&vt10x.ModeAppCursor != 0,
+
+		BracketedPaste: m&vt10x.ModeBracketedPaste != 0,
 	}
 }
 
@@ -405,6 +407,10 @@ type InputModes struct {
 	MouseSGR    bool // mode 1006: extended (SGR) report encoding instead of legacy X10
 	AltScreen   bool // the alternate screen is active (vim, less, htop, ...)
 	AppCursor   bool // DECCKM: cursor keys send ESC O x instead of ESC [ x
+
+	// BracketedPaste (mode 2004): the app wants pasted text wrapped in
+	// ESC[200~ … ESC[201~ so it can tell a paste from typing.
+	BracketedPaste bool
 }
 
 // Snapshot copies the whole live screen out.

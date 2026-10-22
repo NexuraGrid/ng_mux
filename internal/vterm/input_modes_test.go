@@ -55,3 +55,21 @@ func TestInputModesReflectsAltScreenAndAppCursor(t *testing.T) {
 		t.Error("AltScreen = true after leaving the alternate screen, want false")
 	}
 }
+
+// TestInputModesReflectsBracketedPaste: an app asking for bracketed paste
+// (ESC[?2004h, as Claude Code, vim and modern shells do) is reported, so the
+// server knows whether to keep or strip the paste markers it forwards.
+func TestInputModesReflectsBracketedPaste(t *testing.T) {
+	term := New(80, 24, nil)
+	if term.InputModes().BracketedPaste {
+		t.Fatal("fresh terminal reports bracketed paste on")
+	}
+	term.Write([]byte("\x1b[?2004h"))
+	if !term.InputModes().BracketedPaste {
+		t.Error("BracketedPaste = false after ESC[?2004h, want true")
+	}
+	term.Write([]byte("\x1b[?2004l"))
+	if term.InputModes().BracketedPaste {
+		t.Error("BracketedPaste = true after ESC[?2004l, want false")
+	}
+}

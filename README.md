@@ -29,6 +29,10 @@ Working now:
   buffer, paste it back (and to the OS clipboard via OSC 52 — `set set-clipboard off` to opt out)
 - **zoom** a pane full-screen (`Ctrl-b z`), **flash pane numbers** (`Ctrl-b q`),
   **swap** / **break** / **join** panes (`Ctrl-b {` `}` `!`, `join-pane -s N`)
+- **bracketed paste**: pastes from your terminal reach the pane as text, never
+  as ngmux keys (a `Ctrl-b` inside a paste does nothing), and apps that ask for
+  bracketed paste (shells, vim, Claude Code) get the paste markers, so a
+  multi-line paste is not run line by line. `Ctrl-b ]` pastes the same way
 - **double-width characters** (CJK, emoji) render across two columns in panes and the status bar
 - **config file** (`~/.config/ngmux/ngmux.conf`): custom prefix key, key
   bindings, history limit, default shell, status-bar colours

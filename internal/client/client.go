@@ -160,6 +160,26 @@ const (
 	mouseOff = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 )
 
+// pasteOn / pasteOff toggle bracketed paste (mode 2004) in the real terminal,
+// so pastes arrive wrapped in ESC[200~ … ESC[201~. The client forwards a paste
+// as one literal block and the server keeps or strips the markers depending on
+// whether the pane's app asked for them.
+const (
+	pasteOn  = "\x1b[?2004h"
+	pasteOff = "\x1b[?2004l"
+
+	pasteStartSeq = "\x1b[200~"
+	pasteEndSeq   = "\x1b[201~"
+
+	// maxPasteChunk bounds one forwarded piece of a paste, far below the
+	// protocol's frame limit; a bigger paste goes out in several pieces.
+	maxPasteChunk = 64 << 10
+	// pasteIdleTimeout ends a paste whose end marker never arrives once input
+	// goes quiet, so a stray start marker cannot swallow the keyboard.
+	// Terminals deliver a paste in one burst, well within it.
+	pasteIdleTimeout = time.Second
+)
+
 // DefaultPrefix is Ctrl-b, matching tmux. The config file can override it.
 const DefaultPrefix = config.DefaultPrefix
 
@@ -214,6 +234,8 @@ func Attach(ep ipc.Endpoint, session string, in, out *os.File) error {
 	w := &lockedWriter{w: out}
 	w.WriteString(enterAlt)
 	defer w.WriteString(exitAlt)
+	w.WriteString(pasteOn)
+	defer w.WriteString(pasteOff)
 	if cfg.Mouse {
 		w.WriteString(mouseOn)
 		defer w.WriteString(mouseOff)
@@ -506,7 +528,56 @@ func escapeKey(br *inReader, pc *protocol.Conn, escapeDelay time.Duration, inter
 	if interceptF12 && string(seq) == f12Seq {
 		return true, nil
 	}
+	if string(seq) == pasteStartSeq {
+		return false, readPaste(br, seq, func(b []byte) error {
+			return pc.Write(protocol.Message{Type: protocol.TypeInput, Data: b})
+		})
+	}
 	return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: seq})
+}
+
+// readPaste reads the body of a bracketed paste (its start marker, if any, is
+// passed in start) up to and including the end marker, handing it to emit.
+// Everything in between is text: a prefix key, an Esc or an F12 inside a paste
+// never acts on ngmux. A long paste is emitted in pieces of at most
+// maxPasteChunk bytes, never splitting the end marker; if no byte arrives for
+// pasteIdleTimeout (or the stream ends) before the end marker, the paste is
+// closed out with what was read so far.
+func readPaste(br *inReader, start []byte, emit func([]byte) error) error {
+	end := []byte(pasteEndSeq)
+	buf := append([]byte(nil), start...)
+	for {
+		c, ok := br.ReadByteTimeout(pasteIdleTimeout)
+		if !ok {
+			break
+		}
+		buf = append(buf, c)
+		if bytes.HasSuffix(buf, end) {
+			break
+		}
+		if len(buf) >= maxPasteChunk {
+			keep := partialSuffix(buf, end)
+			if err := emit(buf[:len(buf)-keep]); err != nil {
+				return err
+			}
+			buf = append([]byte(nil), buf[len(buf)-keep:]...)
+		}
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	return emit(buf)
+}
+
+// partialSuffix is the length of the longest suffix of b that is a proper
+// prefix of marker: the bytes to hold back so marker is never split.
+func partialSuffix(b, marker []byte) int {
+	for n := len(marker) - 1; n > 0; n-- {
+		if bytes.HasSuffix(b, marker[:n]) {
+			return n
+		}
+	}
+	return 0
 }
 
 func isCSIFinal(b byte) bool { return b >= 0x40 && b <= 0x7e }
@@ -609,10 +680,24 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
 			return line
 		case 0x1b: // Esc: cancel (swallow a following arrow-key body if any)
+			seq := []byte{0x1b}
 			for br.Buffered() > 0 {
-				if nb, _ := br.ReadByte(); isCSIFinal(nb) {
+				nb, _ := br.ReadByte()
+				seq = append(seq, nb)
+				if (len(seq) == 2 && nb != '[') || (len(seq) > 2 && isCSIFinal(nb)) {
 					break
 				}
+			}
+			if string(seq) == pasteStartSeq {
+				// A paste types its text into the prompt, up to its first
+				// line break; it never cancels or submits it.
+				lineDone := false
+				_ = readPaste(br, nil, func(b []byte) error {
+					buf, lineDone = appendPromptPaste(buf, b, lineDone)
+					return nil
+				})
+				draw()
+				continue
 			}
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
 			return ""
@@ -628,6 +713,26 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 			}
 		}
 	}
+}
+
+// appendPromptPaste adds one piece of a paste to the prompt's text: printable
+// ASCII only (what the prompt accepts when typed), stopping for good at the
+// first line break so a multi-line paste cannot submit anything. done carries
+// that stop across pieces.
+func appendPromptPaste(buf, piece []byte, done bool) ([]byte, bool) {
+	piece = bytes.ReplaceAll(piece, []byte(pasteEndSeq), nil)
+	for _, b := range piece {
+		if done {
+			break
+		}
+		switch {
+		case b == '\r' || b == '\n':
+			done = true
+		case b >= 0x20 && b < 0x7f:
+			buf = append(buf, b)
+		}
+	}
+	return buf, done
 }
 
 // cmdDetach is the one command line the input loop reacts to locally: after
