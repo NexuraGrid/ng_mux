@@ -67,6 +67,7 @@ const (
 	ModeMouseX10
 	ModeMouseMany
 	ModeBracketedPaste
+	ModeSyncOutput
 	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
@@ -118,7 +119,8 @@ type State struct {
 	tabs          []bool
 	title         string
 	colorOverride map[Color]Color
-	cursorStyle   int // DECSCUSR Ps: 0 default, 1-6 block/underline/bar
+	cursorStyle   int  // DECSCUSR Ps: 0 default, 1-6 block/underline/bar
+	lastChar      rune // last printed graphic character, repeated by REP
 
 	// onScrollOut, when set, is called with each line as it leaves the top of
 	// the screen: a full-screen scroll on the main buffer (bottom-margin
@@ -126,6 +128,11 @@ type State struct {
 	// never fires for DL, a partial DECSTBM region, or the alternate screen.
 	// The callee must copy the slice; it is invalid once the call returns.
 	onScrollOut func(line []Glyph)
+
+	// onSync, when set, is called with true just before the app turns
+	// synchronized output (mode 2026) on, while the screen still holds the
+	// last complete frame, and with false right after it turns it off.
+	onSync func(on bool)
 }
 
 func newState(w io.Writer, onScrollOut func(line []Glyph)) *State {
@@ -620,6 +627,15 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 				t.modMode(set, Mode8bit)
 			case 2004: // bracketed paste: wrap pasted text in ESC[200~ … ESC[201~
 				t.modMode(set, ModeBracketedPaste)
+			case 2026: // synchronized output: the app is drawing a frame
+				was := t.mode&ModeSyncOutput != 0
+				if set && !was && t.onSync != nil {
+					t.onSync(true) // the screen is still the last complete frame
+				}
+				t.modMode(set, ModeSyncOutput)
+				if !set && was && t.onSync != nil {
+					t.onSync(false)
+				}
 			case 1049, // = 1047 and 1048
 				47, 1047:
 				alt := t.mode&ModeAltScreen != 0

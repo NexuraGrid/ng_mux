@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/MauricioJC3/ng_mux/internal/vt10x"
@@ -44,8 +45,8 @@ var ErrEmulatorPanic = errors.New("vterm: recovered panic in terminal emulator")
 // vt10x should write query responses to — always Term.replyQ (the async
 // queue), never the real pty master directly, and never reconstructed on
 // panic recovery so replies keep flowing through the same goroutine.
-func newEmulator(cols, rows int, reply io.Writer, onScrollOut func(ln []vt10x.Glyph)) vt10x.Terminal {
-	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows), vt10x.WithScrollback(onScrollOut)}
+func newEmulator(cols, rows int, reply io.Writer, onScrollOut func(ln []vt10x.Glyph), onSync func(on bool)) vt10x.Terminal {
+	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows), vt10x.WithScrollback(onScrollOut), vt10x.WithSyncHook(onSync)}
 	if reply != nil {
 		opts = append(opts, vt10x.WithWriter(reply))
 	}
@@ -167,6 +168,15 @@ type Term struct {
 	// never make that block (see Write/Dirty). Snapshot clears it. A fresh
 	// Term is dirty so its first frame is always drawn.
 	dirty atomic.Bool
+
+	// frozen holds the last complete frame while the app is drawing a new
+	// one under synchronized output (mode 2026), so a snapshot taken mid-update
+	// never shows it half drawn. frozenOn is set from onSync's start until its
+	// end, a resize or a panic reset; frozenAt bounds it by syncTimeout.
+	// Caller holds mu.
+	frozen   Snapshot
+	frozenOn bool
+	frozenAt time.Time
 }
 
 // New creates an emulator of the given size. reply receives the bytes the
@@ -187,7 +197,7 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if reply != nil {
 		t.replyQ = newReplyQueue(reply)
 	}
-	t.t = newEmulator(cols, rows, t.queueWriter(), t.pushHistory)
+	t.t = newEmulator(cols, rows, t.queueWriter(), t.pushHistory, t.onSync)
 	return t
 }
 
@@ -262,9 +272,10 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	// goroutine.
 	defer func() {
 		if r := recover(); r != nil {
-			t.t = newEmulator(t.cols, t.rows, t.queueWriter(), t.pushHistory)
+			t.t = newEmulator(t.cols, t.rows, t.queueWriter(), t.pushHistory, t.onSync)
 			t.dirty.Store(true)
 			t.pending = t.pending[:0]
+			t.frozenOn = false
 			err = fmt.Errorf("%w: %v\n%s", ErrEmulatorPanic, r, debug.Stack())
 		}
 	}()
@@ -338,6 +349,7 @@ func (t *Term) Resize(cols, rows int) {
 	defer t.mu.Unlock()
 	t.t.Resize(cols, rows)
 	t.cols, t.rows = cols, rows
+	t.frozenOn = false // the saved frame no longer fits the new size
 	t.dirty.Store(true)
 }
 
@@ -443,9 +455,46 @@ func (t *Term) SnapshotInto(dst *Snapshot) {
 	// only ever cost one extra (harmless) repaint.
 	t.dirty.Store(false)
 
+	if t.frozenOn && time.Since(t.frozenAt) < syncTimeout {
+		// Mid-update: show the last complete frame. Stay dirty so the
+		// broadcaster keeps polling and picks the new frame up as soon as the
+		// update ends, or the live screen once it times out.
+		t.dirty.Store(true)
+		copySnapshot(dst, &t.frozen)
+		return
+	}
+
 	t.t.Lock()
 	defer t.t.Unlock()
+	t.copyScreen(dst)
+}
 
+// onSync is vt10x's synchronized-output hook. It runs inside t.t.Write, so
+// t.mu and the emulator's own lock are both held: on start it saves the screen
+// as it is, the last complete frame.
+func (t *Term) onSync(on bool) {
+	t.frozenOn = on
+	if on {
+		t.frozenAt = time.Now()
+		t.copyScreen(&t.frozen)
+	}
+}
+
+// copySnapshot copies src into dst, reusing dst.Cells when large enough.
+func copySnapshot(dst, src *Snapshot) {
+	cells := dst.Cells
+	if cap(cells) < len(src.Cells) {
+		cells = make([]Cell, len(src.Cells))
+	}
+	cells = cells[:len(src.Cells)]
+	copy(cells, src.Cells)
+	*dst = *src
+	dst.Cells = cells
+}
+
+// copyScreen copies the live screen into dst. Caller holds t.mu and the
+// emulator's lock.
+func (t *Term) copyScreen(dst *Snapshot) {
 	cols, rows := t.cols, t.rows
 	need := cols * rows
 	if cap(dst.Cells) < need {
@@ -632,3 +681,7 @@ func convAttr(mode int16) uint16 {
 	}
 	return a
 }
+
+// syncTimeout bounds how long a synchronized update (DEC mode 2026) may hold
+// back a pane's screen, so an app that never ends one cannot freeze it.
+const syncTimeout = 200 * time.Millisecond
