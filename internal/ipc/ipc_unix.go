@@ -41,7 +41,7 @@ func socketDir() (string, error) {
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(st.Uid) != os.Getuid() || info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("ipc: socket dir %s has unsafe permissions (want owner uid %d, mode 0700)", dir, os.Getuid())
+		return "", fmt.Errorf("ipc: socket dir %s has unsafe permissions (want owner uid %d, no group or other access)", dir, os.Getuid())
 	}
 	// Ours and owner-only, but maybe narrower than 0700: a restrictive umask
 	// (0277 gives 0500), possibly from another ngmux that created it a moment
