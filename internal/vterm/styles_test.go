@@ -95,3 +95,74 @@ func TestScrollbackKeepsColoredTrailingSpaces(t *testing.T) {
 		}
 	}
 }
+
+// An empty CSI parameter means its default (ECMA-48): 0 for SGR, so fzf's
+// "ESC[;1;38;5;161;48;5;236m" is reset-then-style. It used to stop parsing at
+// the empty parameter, dropping every color fzf draws (B15: `zi` colors).
+func TestEmptySGRParameterIsReset(t *testing.T) {
+	for _, tt := range []struct {
+		name, in string
+		x        int
+		fg, bg   uint32
+		attr     uint16
+	}{
+		{"fzf pointer", "\x1b[;1;38;5;161;48;5;236mX", 0, 161, 236, AttrBold},
+		{"leading empty resets", "\x1b[1;31mA\x1b[;32mB", 1, 2, ColorDefault, 0},
+		{"middle empty resets", "\x1b[1;;31mX", 0, 1, ColorDefault, 0},
+		{"trailing empty resets", "\x1b[1;31;mX", 0, ColorDefault, ColorDefault, 0},
+		{"bare SGR still resets", "\x1b[1;31mA\x1b[mB", 1, ColorDefault, ColorDefault, 0},
+	} {
+		c := cellAt(t, tt.in, tt.x)
+		if c.FG != tt.fg || c.BG != tt.bg || c.Attr != tt.attr {
+			t.Errorf("%s: cell = fg %d bg %d attr %#x, want fg %d bg %d attr %#x",
+				tt.name, c.FG, c.BG, c.Attr, tt.fg, tt.bg, tt.attr)
+		}
+	}
+}
+
+// For cursor moves an empty parameter takes that command's own default, so
+// "ESC[;5H" is row 1, column 5 and "ESC[2;H" is row 2, column 1.
+func TestEmptyCursorParameterUsesDefault(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		x, y int
+	}{
+		{"\x1b[;5HX", 4, 0},
+		{"\x1b[2;HX", 0, 1},
+		{"abc\x1b[HX", 0, 0}, // no parameters at all: unchanged
+	} {
+		term := New(20, 3, nil)
+		if _, err := term.Write([]byte(tt.in)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		snap := term.Snapshot()
+		if got := snap.At(tt.x, tt.y).Ch; got != 'X' {
+			t.Errorf("%q: cell (%d,%d) = %q, want 'X'", tt.in, tt.x, tt.y, got)
+		}
+	}
+}
+
+// Mode and scroll-region commands also read an empty parameter as default:
+// "ESC[?;25l" still hides the cursor and "ESC[;3r" is rows 1-3.
+func TestEmptyModeAndRegionParameters(t *testing.T) {
+	term := New(20, 5, nil)
+	if _, err := term.Write([]byte("\x1b[?;25l")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if snap := term.Snapshot(); snap.CurVisible {
+		t.Error(`"ESC[?;25l" left the cursor visible`)
+	}
+
+	term = New(20, 5, nil)
+	// Region rows 1-3; Z sits below it and must not move when it scrolls.
+	if _, err := term.Write([]byte("\x1b[;3r\x1b[5;1HZ\x1b[1;1HA\r\nB\r\nC\r\nD")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	snap := term.Snapshot()
+	if got := snap.At(0, 0).Ch; got != 'B' {
+		t.Errorf("row 0 = %q, want 'B' (A scrolled out of the 3-row region)", got)
+	}
+	if got := snap.At(0, 4).Ch; got != 'Z' {
+		t.Errorf("row 4 = %q, want 'Z' (outside the region)", got)
+	}
+}

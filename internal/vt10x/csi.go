@@ -78,6 +78,13 @@ func (c *csiEscape) parse() {
 	}
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
+		// An empty parameter ("ESC[;5H", fzf's "ESC[;1;38;5;161m") stands
+		// for the command's default (ECMA-48). Stopping at it, as Atoi("")
+		// failing used to, dropped every parameter after it.
+		if p == "" {
+			c.args = append(c.args, argDefault)
+			continue
+		}
 		i, err := strconv.Atoi(p)
 		if err != nil {
 			//t.logf("invalid CSI arg '%s'\n", p)
@@ -111,11 +118,26 @@ func clampArg(i int) int {
 	return i
 }
 
+// argDefault marks an empty parameter. clampArg never yields a negative value,
+// so it cannot collide with a real one.
+const argDefault = -1
+
 func (c *csiEscape) arg(i, def int) int {
-	if i >= len(c.args) || i < 0 {
+	if i >= len(c.args) || i < 0 || c.args[i] == argDefault {
 		return def
 	}
 	return c.args[i]
+}
+
+// argsOr returns the parameter list with every empty parameter replaced by
+// def, for handlers (SGR, SM/RM) that walk the whole list.
+func (c *csiEscape) argsOr(def int) []int {
+	for i, a := range c.args {
+		if a == argDefault {
+			c.args[i] = def
+		}
+	}
+	return c.args
 }
 
 // maxarg takes the maximum of arg(i, def) and def
@@ -226,7 +248,7 @@ func (t *State) handleCSI() {
 	case 'L': // IL - insert <n> blank lines
 		t.insertBlankLines(c.arg(0, 1))
 	case 'l': // RM - reset mode
-		t.setMode(c.priv, false, c.args)
+		t.setMode(c.priv, false, c.argsOr(0))
 	case 'M': // DL - delete <n> lines
 		t.deleteLines(c.arg(0, 1))
 	case 'X': // ECH - erase <n> chars
@@ -245,12 +267,12 @@ func (t *State) handleCSI() {
 	case 'd': // VPA - move to <row>
 		t.moveAbsTo(t.cur.X, c.arg(0, 1)-1)
 	case 'h': // SM - set terminal mode
-		t.setMode(c.priv, true, c.args)
+		t.setMode(c.priv, true, c.argsOr(0))
 	case 'm': // SGR - terminal attribute (color)
 		if c.marked {
 			goto unknown // XTMODKEYS and friends; never attributes
 		}
-		t.setAttr(c.args)
+		t.setAttr(c.argsOr(0))
 	case 'n':
 		switch c.arg(0, 0) {
 		case 5: // DSR - device status report
