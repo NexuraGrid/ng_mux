@@ -132,6 +132,17 @@ func (c *client) send(m protocol.Message) bool {
 	}
 }
 
+// trySend queues a control message only if there is room right now, and
+// reports whether it did. For callers that must not wait on a client.
+func (c *client) trySend(m protocol.Message) bool {
+	select {
+	case c.ctrl <- m:
+		return true
+	default:
+		return false
+	}
+}
+
 // needsFrame reports whether this client must be sent a frame even if its
 // session did not change: it has nothing on screen yet (attach, reset, resize)
 // or a frame was skipped while its writer was busy.

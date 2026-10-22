@@ -637,7 +637,6 @@ func plainBlank(g vt10x.Glyph) bool {
 		return true // what a cleared cell holds: the common case
 	}
 	return g.Mode&(vt10x.AttrWide|vt10x.AttrWideTail) == 0 && convAttr(g.Mode) == 0 &&
-		g.Mode&(vt10x.AttrWide|vt10x.AttrWideTail) == 0 && convAttr(g.Mode) == 0 &&
 		convColor(g.FG) == ColorDefault && convColor(g.BG) == ColorDefault
 }
 

@@ -68,7 +68,7 @@ func TestUnterminatedPasteReleasesKeyboard(t *testing.T) {
 		pw.Close()
 	}()
 	got := runInputEventsFrom(t, keymap{prefix: DefaultPrefix}, pr)
-	want := []string{`input:"\x1b[200~abc"`, "exec:kill-pane"}
+	want := []string{`input:"\x1b[200~abc\x1b[201~"`, "exec:kill-pane"}
 	if !equalEvents(got, want) {
 		t.Fatalf("events = %q, want %q", got, want)
 	}
@@ -115,6 +115,22 @@ func TestSplitArrowAfterPrefixStillMovesFocus(t *testing.T) {
 	}()
 	got := runInputEventsFrom(t, keymap{prefix: DefaultPrefix}, pr)
 	want := []string{"exec:previous-pane"}
+	if !equalEvents(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+// A paste closed out by the idle timeout still ends with the end marker, so
+// an app in bracketed-paste mode leaves paste mode and later keys are keys.
+func TestUnterminatedPasteIsClosedForTheApp(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write([]byte("\x1b[200~abc"))
+		time.Sleep(pasteIdleTimeout + 300*time.Millisecond)
+		pw.Close()
+	}()
+	got := runInputEventsFrom(t, keymap{prefix: DefaultPrefix}, pr)
+	want := []string{`input:"\x1b[200~abc\x1b[201~"`}
 	if !equalEvents(got, want) {
 		t.Fatalf("events = %q, want %q", got, want)
 	}

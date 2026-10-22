@@ -556,13 +556,20 @@ func escapeKey(br *inReader, pc *protocol.Conn, escapeDelay time.Duration, inter
 // never acts on ngmux. A long paste is emitted in pieces of at most
 // maxPasteChunk bytes, never splitting the end marker; if no byte arrives for
 // pasteIdleTimeout (or the stream ends) before the end marker, the paste is
-// closed out with what was read so far.
+// closed out with what was read so far, plus an end marker when start had
+// the start marker.
 func readPaste(br *inReader, start []byte, emit func([]byte) error) error {
 	end := []byte(pasteEndSeq)
 	buf := append([]byte(nil), start...)
 	for {
 		c, ok := br.ReadByteTimeout(pasteIdleTimeout)
 		if !ok {
+			// Closed out without its end marker: add one when the start
+			// marker went out, so an app in bracketed-paste mode leaves
+			// paste mode instead of taking later keys as pasted text.
+			if len(start) > 0 {
+				buf = append(buf, end...)
+			}
 			break
 		}
 		buf = append(buf, c)

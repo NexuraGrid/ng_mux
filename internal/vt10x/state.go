@@ -343,9 +343,14 @@ func (t *State) reset() {
 	}
 	t.top = 0
 	t.bottom = t.rows - 1
+	syncing := t.mode&ModeSyncOutput != 0
 	t.mode = ModeWrap
+	if syncing && t.onSync != nil {
+		t.onSync(false) // a reset ends any synchronized update
+	}
 	t.cursorStyle = 0
-	t.clear(0, 0, t.rows-1, t.cols-1)
+	t.lastChar = 0
+	t.clear(0, 0, t.cols-1, t.rows-1)
 	t.moveTo(0, 0)
 }
 

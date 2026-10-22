@@ -74,3 +74,13 @@ func TestReportsSyncOutputSupport(t *testing.T) {
 		t.Fatalf("reply = %q, want %q", got, want)
 	}
 }
+
+// A full reset (RIS, ESC c) in the middle of a synchronized update ends it:
+// the reset screen shows at once instead of after the timeout.
+func TestResetEndsSyncOutput(t *testing.T) {
+	term := New(20, 2, nil)
+	term.Write([]byte("A\x1b[?2026h\x1bcZ"))
+	if got := row0(term); got != "Z" {
+		t.Fatalf("row after reset = %q, want %q", got, "Z")
+	}
+}
