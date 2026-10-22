@@ -33,6 +33,13 @@ Performance
 
 - B13 Log floods: the next hot spot is vt10x `clear()` of the scrolled-in row (~17% CPU). Reducing it needs emulator rework. Current: 26 MB/s, ~450k lines/s in `BenchmarkWriteLogFlood`; `seq 1 3000000` ~5 s vs 1-2 s in a plain terminal.
 
+Terminal fidelity
+
+- B15 `zi` (zoxide interactive, fzf) loses its colors inside ngmux; in a plain terminal the same command shows them. User report (2026-10-21): "cuadno busco algo por zi dentro de ngmux no aparecen los colores [...] quita los colores y la persona no peude saber bien a cual proyecto va a entrar porque aparece un blanco super raro". Observed in ngmux vs plain terminal (screenshots, `zi ng`): the selected row has no highlight background, the red pointer/gutter bar becomes a white bar on every row, and the preview (`ls --color` of the directory) shows directories uncolored. The shell prompt keeps its colors, so plain 16-color SGR works. Acceptance: `zi` inside ngmux looks like in the plain terminal (selected-row highlight, colored gutter/pointer, colored preview).
+  - First step: reproduce and compare `env | rg 'TERM|COLOR'` inside and outside ngmux, and capture fzf's raw output (`script`) in both to see whether fzf emits no colors (environment/detection: `NO_COLOR`, `TERM`, `COLORTERM`; fzf in no-color mode looks exactly like the screenshot) or ngmux drops/misrenders them.
+  - Pane env: `internal/ptyx/ptyx.go:83` appends `TERM=xterm-256color` after `os.Environ()`, so the daemon's own `TERM` (and any `NO_COLOR`) also reaches the pane, and `COLORTERM` is never set.
+  - Emulator: `internal/vt10x/state.go:746-783` stores truecolor as `Color(r<<16|g<<8|b)` in the same space as palette indexes, so any RGB value below 256 (e.g. `#0000c8`) is rendered as palette color N (`internal/render/render.go:709`, `internal/vterm/vterm.go:665` test `< 256`). Colon-separated SGR (`38:2::r:g:b`) is not parsed.
+
 Product
 
 - B14 Mouse capture is on by default, which hides the terminal's own selection (Shift-drag works); consider whether the default should change or be documented more visibly.
@@ -41,9 +48,10 @@ Product
 
 | ID | Specs | Route | Status |
 |----|-------|-------|--------|
-| - | B1-B14 | - | open, not planned yet |
+| - | B1-B15 | - | open, not planned yet |
 
 ## Log
 
 - L1 (2026-10-21, user): "anota por favor lo que falta osea el ps2 y los demas para continuar despues por favor"
 - L2 P0 and P1 shipped through the stacked PRs to main and the v0.9.0 release.
+- L3 (2026-10-21, user): "anota eso de forma clara apra hacerlo y corregirlo por favor" (B15, zoxide/fzf colors).
