@@ -24,7 +24,7 @@ Branches: one per slice, stacked on `fix/pty-input-queue`, each PR to `main` (st
 | T3 | S5 | feat/sync-output | inline | done | f27bf42 (RED: mid-update row "ABC" want "A", no DECRQM reply; GREEN) |
 | T4 | S6 | feat/sync-output | inline | done | 0d10da6 (RED: IRM row "XYc", REP row "a-|"; GREEN + 20s FuzzTermOps clean) |
 | T5 | S7 | feat/inner-clipboard | inline | done | 24e04a3 (RED: TakeClipboard "", no set_clipboard msg; GREEN + e2e OSC 52 end to end) |
-| T6 | S8 | fix/overlay-paste | inline | open | |
+| T6 | S8 | fix/overlay-paste | inline | done | 6defda9 (RED: pasted "ls\\r" reached the pane after prefix and over Ctrl-b m; GREEN + split-arrow guard) |
 | T7 | S9 | perf/scrollback-capture | inline | open | |
 
 Route evidence: no Writer trigger (sequential units sharing vt10x/vterm/render files; no context backstop yet), so the parent writes inline.
@@ -37,3 +37,4 @@ Route evidence: no Writer trigger (sequential units sharing vt10x/vterm/render f
 - L4 T1+T2 done on feat/text-styles; full `go test -race ./...` green, Windows build ok. Extra fix found while exploring: setChar pre-swapped FG/BG for reverse while render also sent SGR 7 (reverse cancelled). CSI sequences with an intermediate byte other than DECSCUSR are now ignored instead of running as the plain command.
 - L5 T3+T4 done on feat/sync-output. Sync freeze bounded by syncTimeout=200ms; DECRQM answers 2004/2026. Full suite -race green, Windows build ok.
 - L6 T5 done on feat/inner-clipboard: OSC 52 decoded in vt10x, drained per tick (lock-free flag), sent to viewers from goroutines, kept in paste buffer; set-clipboard off drains+drops; read requests never answered. OSC cap 256 -> 128Ki runes. newEmulator became a Term method.
+- L7 T6 done on fix/overlay-paste. readEscBody helper waits escBodyWait=50ms per byte (replaces blocking arrowCommand reads; keeps split arrows working).
