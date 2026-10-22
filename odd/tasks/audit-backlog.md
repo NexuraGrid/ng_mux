@@ -43,11 +43,11 @@ Terminal fidelity
 Found while doing P2 and B15 (2026-10-22)
 
 - B16 Partly checked (2026-10-22): non-elevated `new` and `attach` work; the elevated vs non-elevated run is still pending (user will do it later). Validate v0.9.1 on real Windows: `ngmux new`, `attach` and `ls` from a normal and from an elevated terminal. A non-elevated client may refuse a daemon started elevated ("cannot verify the owner of server process N"), because OpenProcessToken can be denied across integrity levels; if it happens, rework the owner check (e.g. compare the pipe's owner SID instead of opening the process token). `internal/ipc/ipc_windows.go` checkServerOwner.
-- B17 `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
-- B18 `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
-- B19 Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
+- B17 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
+- B18 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
+- B19 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
 - B20 `TestRunDaemonLogsListenError` assumes `XDG_CACHE_HOME`, which macOS ignores (CI runs Linux and Windows only). `cmd/ngmux/daemon_log_test.go`.
-- B21 From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
+- B21 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
 
 Session lifecycle (user report, 2026-10-22)
 
@@ -66,7 +66,8 @@ Product
 | - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
 | - | B15 | inline | done, v0.9.1 (PR #37) |
 | - | B22-B23 | inline, `fix/session-lifecycle` | done, PR #38 (merged 2026-10-22), not released yet |
-| - | B1, B6-B14, B16-B21 | - | open, not planned yet |
+| - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | fixed on `fix/real-bugs-b17-b21`, not merged yet |
+| - | B1, B6-B14, B16, B20 | - | open, not planned yet |
 
 ## Log
 
@@ -76,3 +77,4 @@ Product
 - L4 (2026-10-22, user): "Si por favor y guarda ya lo hecho y lo que falta y genera la release con los cmabios hechos hasta ahora". P2 (PR #36) and B15 (PR #37) merged to main and released as v0.9.1; B16-B21 added from the verifier and review advisories. Next: B16 (real Windows check), then B1.
 - L5 (2026-10-22, user): "Si por favor arregla los bugs y anota para que sepamos y nos quede como historial de que se detecto y que se van a corregir y en cuento a lo de la terminal elevada todavia no he hecho la prueba edspues la hago". Added B22-B23 (phantom session `0`, switch-on-close) and fixed them on `fix/session-lifecycle`; recorded the partial Windows checks in B1 and B16.
 - L6 (2026-10-22, user): "no tranquilo no se aplicara un comando para cerrar una session entera esa mejor asi como esta". Decision: no key binding to kill a whole session; it stays `Ctrl-b :` `kill-session` or `ngmux kill-session -t NAME`, so it cannot be triggered by accident.
+- L7 (2026-10-22, user): "No todavia no ahora arreglemos esto" (no v0.9.2 release yet; fix B18, B17, B21, B19). Done on `fix/real-bugs-b17-b21`, see `odd/tasks/real-bugs-b17-b21.md`.
