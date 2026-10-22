@@ -133,6 +133,10 @@ type State struct {
 	// synchronized output (mode 2026) on, while the screen still holds the
 	// last complete frame, and with false right after it turns it off.
 	onSync func(on bool)
+
+	// onClipboard, when set, is called with the decoded text of each OSC 52
+	// clipboard write from the app.
+	onClipboard func(text string)
 }
 
 func newState(w io.Writer, onScrollOut func(line []Glyph)) *State {

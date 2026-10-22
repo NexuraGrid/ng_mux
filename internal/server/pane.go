@@ -43,6 +43,9 @@ type screen interface {
 	// used to decide whether a mouse event should be forwarded to the pane's
 	// own app instead of driving copy-mode.
 	InputModes() vterm.InputModes
+	// TakeClipboard returns, once, the text the app last copied with OSC 52
+	// ("" if none since the last call).
+	TakeClipboard() string
 	// Close stops the emulator's asynchronous reply-delivery goroutine (see
 	// vterm.Term.Close). Called once the pane's pty is closed.
 	Close()

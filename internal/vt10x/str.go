@@ -1,6 +1,7 @@
 package vt10x
 
 import (
+	"encoding/base64"
 	"fmt"
 	"math"
 	"regexp"
@@ -17,15 +18,24 @@ type strEscape struct {
 	args []string
 }
 
+// maxSTRLen bounds one OSC/DCS string. It fits an OSC 52 clipboard copy of
+// the size ngmux will pass on (about 75 KB of base64) and long OSC 8
+// hyperlinks; it used to be 256, which cut both short.
+const maxSTRLen = 128 << 10
+
 func (s *strEscape) reset() {
 	s.typ = 0
-	s.buf = s.buf[:0]
+	if cap(s.buf) > 4096 {
+		s.buf = nil // do not keep a big clipboard payload's buffer around
+	} else {
+		s.buf = s.buf[:0]
+	}
 	s.args = nil
 }
 
 func (s *strEscape) put(c rune) {
 	// TODO: improve allocs with an array backed slice; bench first
-	if len(s.buf) < 256 {
+	if len(s.buf) < maxSTRLen {
 		s.buf = append(s.buf, c)
 	}
 	// Going by st, it is better to remain silent when the STR sequence is not
@@ -132,6 +142,18 @@ func (t *State) handleSTR() {
 				}
 			} else {
 				// TODO: redraw
+			}
+		case 52: // clipboard: "52;<selection>;<base64>" sets it, "?" reads it
+			data := s.argString(2, "")
+			if t.onClipboard == nil || data == "" || data == "?" {
+				break // never answer a read: panes do not get the clipboard
+			}
+			text, err := base64.StdEncoding.DecodeString(data)
+			if err != nil {
+				text, err = base64.RawStdEncoding.DecodeString(data)
+			}
+			if err == nil && len(text) > 0 {
+				t.onClipboard(string(text))
 			}
 		default:
 			t.logf("unknown OSC command %d\n", d)

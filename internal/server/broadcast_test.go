@@ -68,6 +68,7 @@ func (s *blockingScreen) SetHistoryLimit(n int)        {}
 func (s *blockingScreen) Dirty() bool                  { return s.dirty.Load() }
 func (s *blockingScreen) ScrolledTotal() uint64        { return 0 }
 func (s *blockingScreen) InputModes() vterm.InputModes { return vterm.InputModes{} }
+func (s *blockingScreen) TakeClipboard() string        { return "" }
 
 func TestSessionDirtyLifecycle(t *testing.T) {
 	_, ff, sess := setupSession(t)

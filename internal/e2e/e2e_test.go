@@ -584,3 +584,13 @@ func TestCursorShapeEndToEnd(t *testing.T) {
 		t.Fatalf("detach did not restore the default cursor shape; got:\n%q", h.screen())
 	}
 }
+
+// TestInnerClipboardEndToEnd: an app in a pane copying with OSC 52 sets the
+// real terminal's clipboard through ngmux.
+func TestInnerClipboardEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	h.send("printf '\\033]52;c;aG9sYSBtdW5kbw==\\a'\r") // "hola mundo"
+	if !h.waitFor("\x1b]52;c;aG9sYSBtdW5kbw==\a", 3*time.Second) {
+		t.Fatalf("OSC 52 never reached the terminal; got:\n%q", h.screen())
+	}
+}

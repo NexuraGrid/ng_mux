@@ -439,6 +439,27 @@ func (s *session) frameInputs() (cols, rows int, views []render.PaneView, status
 	return cols, rows, views, status
 }
 
+// takeClipboard collects text an app in any of the session's panes copied
+// with OSC 52 since the last call. When several did, the last one checked
+// wins; one copy per tick is plenty for apps driven by a human. With keep
+// set the text also becomes the paste buffer, as a copy-mode yank would.
+func (s *session) takeClipboard(keep bool) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var text string
+	for _, w := range s.windows {
+		for _, p := range w.panes {
+			if t := p.vt.TakeClipboard(); t != "" {
+				text = t
+			}
+		}
+	}
+	if keep && text != "" {
+		s.pasteBuf = text
+	}
+	return text
+}
+
 // dirty reports whether the next frame would differ from the last one frame()
 // produced: a pending needsRepaint, or a pane that consumed new output.
 func (s *session) dirty() bool {

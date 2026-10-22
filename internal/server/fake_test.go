@@ -138,6 +138,7 @@ type fakeScreen struct {
 	snapPanic     bool  // when set, the next SnapshotInto panics and clears it
 	closed        bool  // set by Close, so tests can assert a pane closed its screen
 	title         string
+	clip          string // pending OSC 52 text, see setClipboard
 }
 
 // setTitle simulates the program setting its window title (OSC 0/2).
@@ -404,4 +405,25 @@ func waitFor(t testing.TB, cond func() bool, timeout time.Duration) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("condition not met within %s", timeout)
+}
+
+// setClipboard simulates the pane's app copying text with OSC 52.
+func (s *fakeScreen) setClipboard(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clip = text
+}
+
+func (s *fakeScreen) TakeClipboard() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	text := s.clip
+	s.clip = ""
+	return text
+}
+
+func (srv *Server) hasClients() bool {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return len(srv.clients) > 0
 }
