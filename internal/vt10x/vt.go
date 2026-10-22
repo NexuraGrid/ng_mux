@@ -64,6 +64,17 @@ type TerminalInfo struct {
 	w           io.Writer
 	cols, rows  int
 	onScrollOut func(ln []Glyph)
+	onSync      func(on bool)
+}
+
+// WithSyncHook registers a hook for synchronized output (DEC mode 2026): it
+// is called with true just before the app starts an update, while the screen
+// still shows the last complete frame, and with false once the update ends.
+// It runs inside Write with the terminal locked.
+func WithSyncHook(fn func(on bool)) TerminalOption {
+	return func(info *TerminalInfo) {
+		info.onSync = fn
+	}
 }
 
 func WithWriter(w io.Writer) TerminalOption {

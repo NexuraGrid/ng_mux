@@ -133,6 +133,10 @@ func (t *State) handleCSI() {
 			t.cursorStyle = min(c.arg(0, 0), 6)
 			return
 		}
+		if c.inter == '$' && c.mode == 'p' && c.priv {
+			t.reportPrivateMode(c.arg(0, 0))
+			return
+		}
 		goto unknown
 	}
 	switch c.mode {
@@ -276,6 +280,27 @@ func (t *State) handleCSI() {
 unknown: // TODO: get rid of this goto
 	t.logf("unknown CSI sequence '%c'\n", c.mode)
 	// TODO: c.dump()
+}
+
+// reportPrivateMode answers DECRQM (CSI ? Ps $ p) with CSI ? Ps ; Pm $ y:
+// 1 set, 2 reset, 0 not recognized. Only the modes apps commonly probe for
+// before using them are reported; the rest answer "not recognized".
+func (t *State) reportPrivateMode(mode int) {
+	var flag ModeFlag
+	switch mode {
+	case 2004:
+		flag = ModeBracketedPaste
+	case 2026:
+		flag = ModeSyncOutput
+	}
+	state := 0
+	if flag != 0 {
+		state = 2
+		if t.mode&flag != 0 {
+			state = 1
+		}
+	}
+	t.w.Write([]byte(fmt.Sprintf("\x1b[?%d;%d$y", mode, state)))
 }
 
 // boundedRepeat caps a CSI repeat-count parameter at cols, so a huge parameter
