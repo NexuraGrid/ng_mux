@@ -253,13 +253,16 @@ func cmdKillServer(ep ipc.Endpoint) error {
 	return nil
 }
 
+// daemonStartTimeout is how long startDaemon waits for the daemon's socket.
+const daemonStartTimeout = 5 * time.Second
+
 // startDaemon spawns a detached copy of this binary running `__server` and
 // waits for its socket to come up.
 func startDaemon(ep ipc.Endpoint) error {
 	if err := spawnDaemon(ep); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonStartTimeout)
 	for time.Now().Before(deadline) {
 		if conn, err := ipc.Dial(ep); err == nil {
 			conn.Close()
@@ -373,7 +376,7 @@ func openDaemonLog(epName string) (*os.File, error) {
 func daemonStartError(epName string) error {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return fmt.Errorf("daemon did not come up within 5s")
+		return fmt.Errorf("daemon did not come up within %v", daemonStartTimeout)
 	}
-	return fmt.Errorf("daemon did not come up within 5s (see %s)", daemonLogPath(cacheDir, epName))
+	return fmt.Errorf("daemon did not come up within %v (see %s)", daemonStartTimeout, daemonLogPath(cacheDir, epName))
 }

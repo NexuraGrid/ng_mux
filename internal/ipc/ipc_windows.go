@@ -75,9 +75,12 @@ func Listen(e Endpoint) (net.Listener, error) {
 	return l, nil
 }
 
-// Dial connects to a running server, returning ErrNoServer when the pipe does
-// not exist yet. It refuses a pipe served by another user, which would
-// otherwise receive every keystroke typed into the session.
+// Dial connects to a running server. Any failure to open the pipe (it does not
+// exist yet, it is busy, or its DACL denies us because someone else created
+// it) is reported as ErrNoServer; a squatted name then surfaces when the
+// spawned daemon's Listen fails and logs it. Once connected, Dial refuses a
+// pipe whose server it cannot verify runs as the current user, since that
+// server would otherwise receive every keystroke typed into the session.
 func Dial(e Endpoint) (net.Conn, error) {
 	name := pipeName(e)
 	sid, err := currentUserSID()
@@ -114,12 +117,12 @@ func checkServerOwner(c net.Conn, want *windows.SID) error {
 	}
 	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
-		return refuse(fmt.Sprintf("server process %d is not ours: %v", pid, err))
+		return refuse(fmt.Sprintf("cannot verify the owner of server process %d: %v", pid, err))
 	}
 	defer windows.CloseHandle(proc)
 	var tok windows.Token
 	if err := windows.OpenProcessToken(proc, windows.TOKEN_QUERY, &tok); err != nil {
-		return refuse(fmt.Sprintf("server process %d is not ours: %v", pid, err))
+		return refuse(fmt.Sprintf("cannot verify the owner of server process %d: %v", pid, err))
 	}
 	defer tok.Close()
 	tu, err := tok.GetTokenUser()
