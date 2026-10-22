@@ -313,7 +313,7 @@ func cmdPasteBuffer(c *cmdCtx) (string, error) {
 	// Write outside the session lock, like send-keys: a large paste into a
 	// child that is not reading would otherwise freeze the session.
 	if target != nil {
-		target.write([]byte(buf))
+		target.write(target.bracketPaste([]byte(buf)))
 	}
 	return "", nil
 }

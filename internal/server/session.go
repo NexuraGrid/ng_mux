@@ -339,7 +339,7 @@ func (s *session) input(data []byte) (repaint bool, yanked string) {
 		return true, text
 	}
 	if p != nil {
-		p.write(data)
+		p.write(p.filterPaste(data))
 	}
 	return false, ""
 }

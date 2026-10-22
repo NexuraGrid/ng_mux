@@ -160,6 +160,18 @@ const (
 	mouseOff = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 )
 
+// pasteOn / pasteOff toggle bracketed paste (mode 2004) in the real terminal,
+// so pastes arrive wrapped in ESC[200~ … ESC[201~. The client forwards a paste
+// as one literal block and the server keeps or strips the markers depending on
+// whether the pane's app asked for them.
+const (
+	pasteOn  = "\x1b[?2004h"
+	pasteOff = "\x1b[?2004l"
+
+	pasteStartSeq = "\x1b[200~"
+	pasteEndSeq   = "\x1b[201~"
+)
+
 // DefaultPrefix is Ctrl-b, matching tmux. The config file can override it.
 const DefaultPrefix = config.DefaultPrefix
 
@@ -214,6 +226,8 @@ func Attach(ep ipc.Endpoint, session string, in, out *os.File) error {
 	w := &lockedWriter{w: out}
 	w.WriteString(enterAlt)
 	defer w.WriteString(exitAlt)
+	w.WriteString(pasteOn)
+	defer w.WriteString(pasteOff)
 	if cfg.Mouse {
 		w.WriteString(mouseOn)
 		defer w.WriteString(mouseOff)
@@ -506,7 +520,25 @@ func escapeKey(br *inReader, pc *protocol.Conn, escapeDelay time.Duration, inter
 	if interceptF12 && string(seq) == f12Seq {
 		return true, nil
 	}
+	if string(seq) == pasteStartSeq {
+		return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: readPaste(br, seq)})
+	}
 	return false, pc.Write(protocol.Message{Type: protocol.TypeInput, Data: seq})
+}
+
+// readPaste reads the body of a bracketed paste (start already in buf) up to
+// and including its end marker. Everything in between is text: a prefix key,
+// an Esc or an F12 inside a paste never acts on ngmux. If the stream ends
+// first, what was read so far is returned.
+func readPaste(br *inReader, buf []byte) []byte {
+	for !bytes.HasSuffix(buf, []byte(pasteEndSeq)) {
+		c, err := br.ReadByte()
+		if err != nil {
+			break
+		}
+		buf = append(buf, c)
+	}
+	return buf
 }
 
 func isCSIFinal(b byte) bool { return b >= 0x40 && b <= 0x7e }
