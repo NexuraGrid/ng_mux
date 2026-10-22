@@ -1,0 +1,116 @@
+//go:build !windows
+
+package ipc
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// runtimeDir points XDG_RUNTIME_DIR at a fresh temp dir and returns the
+// per-user socket dir socketDir is expected to use under it.
+func runtimeDir(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", base)
+	return filepath.Join(base, "ngmux-"+strconv.Itoa(os.Getuid()))
+}
+
+func TestSocketDirCreatesPrivateDir(t *testing.T) {
+	want := runtimeDir(t)
+	got, err := socketDir()
+	if err != nil {
+		t.Fatalf("socketDir: %v", err)
+	}
+	if got != want {
+		t.Fatalf("socketDir = %q, want %q", got, want)
+	}
+	info, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want dir 0700", info.Mode())
+	}
+}
+
+func TestSocketDirAcceptsExistingPrivateDir(t *testing.T) {
+	dir := runtimeDir(t)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := socketDir(); err != nil {
+		t.Fatalf("socketDir on an existing 0700 dir: %v", err)
+	}
+}
+
+func TestSocketDirRefusesLooseMode(t *testing.T) {
+	dir := runtimeDir(t)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := socketDir()
+	if err == nil || !strings.Contains(err.Error(), "unsafe permissions") {
+		t.Fatalf("socketDir on a 0755 dir: err = %v, want unsafe permissions", err)
+	}
+	// Refusing must not "fix" the dir behind the owner's back.
+	if info, _ := os.Lstat(dir); info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode changed to %v", info.Mode().Perm())
+	}
+}
+
+func TestSocketDirRefusesSymlink(t *testing.T) {
+	dir := runtimeDir(t)
+	target := t.TempDir() // 0700, owned by us: only the symlink is wrong
+	if err := os.Symlink(target, dir); err != nil {
+		t.Fatal(err)
+	}
+	_, err := socketDir()
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("socketDir on a symlink: err = %v, want not a directory", err)
+	}
+}
+
+func TestListenAndDialRefuseUnsafeDir(t *testing.T) {
+	dir := runtimeDir(t)
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	ep := Endpoint{Name: "unsafe"}
+	if l, err := Listen(ep); err == nil {
+		l.Close()
+		t.Fatal("Listen succeeded in a world-writable socket dir")
+	}
+	if _, err := Dial(ep); err == nil || err == ErrNoServer {
+		t.Fatalf("Dial: err = %v, want the unsafe-dir error (not ErrNoServer)", err)
+	}
+}
+
+func TestListenDialRoundTrip(t *testing.T) {
+	runtimeDir(t)
+	ep := Endpoint{Name: "roundtrip"}
+	l, err := Listen(ep)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer l.Close()
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			c.Close()
+		}
+	}()
+	c, err := Dial(ep)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	c.Close()
+}

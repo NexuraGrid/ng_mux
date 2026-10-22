@@ -11,6 +11,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -161,6 +162,11 @@ func cmdNew(ep ipc.Endpoint, args []string) error {
 		return err
 	}
 	if _, err := ipc.Dial(ep); err != nil {
+		// Anything but "nobody is listening" (e.g. an unsafe socket dir) is
+		// fatal: spawning a daemon would only hit the same error, unseen.
+		if !errors.Is(err, ipc.ErrNoServer) {
+			return err
+		}
 		if err := startDaemon(ep); err != nil {
 			return err
 		}
