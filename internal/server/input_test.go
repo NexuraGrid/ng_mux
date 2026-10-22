@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,5 +62,22 @@ func TestPaneInputQueueIsBounded(t *testing.T) {
 	waitFor(t, func() bool { return p.in.pending() == 0 }, 5*time.Second)
 	if sent := pt.sentToChild(); len(sent) > maxPendingInput+len(chunk) || strings.Trim(sent, "x") != "" {
 		t.Fatalf("child got %d bytes, want at most %d of 'x'", len(sent), maxPendingInput+len(chunk))
+	}
+}
+
+// TestPaneInputSurvivesWriteError: one failed pty write (a transient ConPTY
+// hiccup) loses only that chunk; later input still reaches the child.
+func TestPaneInputSurvivesWriteError(t *testing.T) {
+	pt := newFakePty(80, 24)
+	pt.failNext = errors.New("transient")
+	p := &pane{id: 1, pt: pt}
+	pt.queued = p.in.pending
+	t.Cleanup(func() { p.in.close(); pt.Close() })
+
+	p.write([]byte("lost"))
+	waitFor(t, func() bool { return p.in.pending() == 0 }, time.Second)
+	p.write([]byte("kept"))
+	if got := pt.sentToChild(); got != "kept" {
+		t.Fatalf("child got %q, want %q", got, "kept")
 	}
 }

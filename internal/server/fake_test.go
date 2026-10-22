@@ -33,6 +33,9 @@ type fakePty struct {
 	// input queue, so sentToChild can wait for writes already handed to the
 	// pane to land instead of racing its writer goroutine.
 	queued func() int
+
+	// failNext, when set, makes the next Write fail with it (and clears it).
+	failNext error
 }
 
 func newFakePty(cols, rows int) *fakePty {
@@ -79,6 +82,10 @@ func (f *fakePty) Write(p []byte) (int, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failNext; err != nil {
+		f.failNext = nil
+		return 0, err
+	}
 	return f.written.Write(p)
 }
 

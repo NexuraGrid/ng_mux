@@ -20,7 +20,8 @@ const maxPendingInput = 16 << 20
 // one that waits.
 //
 // The zero value is ready to use; the writer goroutine starts on the first
-// push and exits on close or on the first write error.
+// push and exits on close. A failed write loses only its own chunk, as the
+// old direct writes did, so a transient error never mutes the pane for good.
 type inputQueue struct {
 	mu      sync.Mutex
 	chunks  [][]byte
@@ -63,8 +64,7 @@ func (q *inputQueue) signal() {
 	}
 }
 
-// run writes queued chunks to w, oldest first, until the queue is closed or a
-// write fails (the pty is gone, so nothing queued could be delivered anyway).
+// run writes queued chunks to w, oldest first, until the queue is closed.
 func (q *inputQueue) run(w io.Writer, wake <-chan struct{}) {
 	for {
 		q.mu.Lock()
@@ -82,17 +82,10 @@ func (q *inputQueue) run(w io.Writer, wake <-chan struct{}) {
 		q.chunks = q.chunks[1:]
 		q.mu.Unlock()
 
-		_, err := w.Write(chunk)
+		_, _ = w.Write(chunk)
 
 		q.mu.Lock()
 		q.size -= len(chunk)
-		if err != nil {
-			q.closed = true
-			q.chunks = nil
-			q.size = 0
-			q.mu.Unlock()
-			return
-		}
 		q.mu.Unlock()
 	}
 }
