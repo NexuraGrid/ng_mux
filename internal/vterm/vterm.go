@@ -607,16 +607,38 @@ func (t *Term) pushHistory(g []vt10x.Glyph) {
 		t.histHead = (t.histHead + 1) % len(t.histBuf)
 	}
 
-	row := t.histBuf[slot]
-	if cap(row) < len(g) {
-		row = make([]Cell, len(g))
-	} else {
-		row = row[:len(g)]
+	// Trailing plain blanks are not stored: ScrollbackView pads short rows
+	// with blanks, so they read back the same, and log lines are usually far
+	// shorter than the pane. Converting only the text roughly halves the cost
+	// of a scrolled line on a wide pane.
+	n := len(g)
+	for n > 0 && plainBlank(g[n-1]) {
+		n--
 	}
-	for i, gl := range g {
+	row := t.histBuf[slot]
+	if cap(row) < n {
+		row = make([]Cell, n, len(g))
+	} else {
+		row = row[:n]
+	}
+	for i, gl := range g[:n] {
 		row[i] = toCell(gl)
 	}
 	t.histBuf[slot] = row
+}
+
+// plainBlank reports whether g would convert to blankCell(): an empty or
+// space glyph with default colors and no visible attribute.
+func plainBlank(g vt10x.Glyph) bool {
+	if g.Char != 0 && g.Char != ' ' {
+		return false
+	}
+	if g.Mode == 0 && g.FG == vt10x.DefaultFG && g.BG == vt10x.DefaultBG {
+		return true // what a cleared cell holds: the common case
+	}
+	return g.Mode&(vt10x.AttrWide|vt10x.AttrWideTail) == 0 && convAttr(g.Mode) == 0 &&
+		g.Mode&(vt10x.AttrWide|vt10x.AttrWideTail) == 0 && convAttr(g.Mode) == 0 &&
+		convColor(g.FG) == ColorDefault && convColor(g.BG) == ColorDefault
 }
 
 func toCell(g vt10x.Glyph) Cell {
@@ -663,6 +685,9 @@ func convAttr(mode int16) uint16 {
 		vtHidden    = 1 << 10
 		vtStrike    = 1 << 11
 	)
+	if mode&(vtReverse|vtUnderline|vtBold|vtItalic|vtBlink|vtDim|vtHidden|vtStrike) == 0 {
+		return 0 // plain text, by far the most common cell
+	}
 	var a uint16
 	if mode&vtReverse != 0 {
 		a |= AttrReverse
