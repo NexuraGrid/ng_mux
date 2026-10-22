@@ -71,3 +71,27 @@ func TestCursorStyleFollowsDECSCUSR(t *testing.T) {
 		}
 	}
 }
+
+// Scrollback keeps what a line really showed: trailing spaces with a
+// background color stay colored, and the rest of a short line reads back as
+// plain blanks.
+func TestScrollbackKeepsColoredTrailingSpaces(t *testing.T) {
+	term := New(10, 2, nil)
+	term.Write([]byte("ab\x1b[41m  \x1b[0m\r\nx\r\ny\r\nz"))
+	if term.HistoryLen() < 1 {
+		t.Fatal("nothing scrolled into history")
+	}
+	snap := term.ScrollbackView(term.HistoryLen(), 2) // row 0: oldest history line
+	for x, want := range []Cell{
+		{Ch: 'a', FG: ColorDefault, BG: ColorDefault, Width: 1},
+		{Ch: 'b', FG: ColorDefault, BG: ColorDefault, Width: 1},
+		{Ch: ' ', FG: ColorDefault, BG: 1, Width: 1},
+		{Ch: ' ', FG: ColorDefault, BG: 1, Width: 1},
+		blankCell(),
+		blankCell(),
+	} {
+		if got := snap.At(x, 0); got != want {
+			t.Errorf("history cell %d = %+v, want %+v", x, got, want)
+		}
+	}
+}

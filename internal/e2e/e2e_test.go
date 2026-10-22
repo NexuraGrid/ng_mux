@@ -339,9 +339,13 @@ func TestCopyModeShowsScrollback(t *testing.T) {
 	h := newHarness(t)
 	time.Sleep(300 * time.Millisecond)
 
-	// Print many numbered lines so the earliest scroll off the 24-row screen.
-	h.send("i=1; while [ $i -le 60 ]; do printf 'SBK_%d\\n' $i; i=$((i+1)); done\r")
-	if !h.waitFor("SBK_60", 4*time.Second) {
+	// Print many numbered lines so the earliest scroll off the 24-row screen,
+	// then a completion marker. Frames are diffs, so "SBK_60" itself may only
+	// reach the wire as "60" painted after an "SBK_" already on screen; the
+	// marker shares no cell with those lines (and is not in the echoed
+	// command), so it always arrives whole.
+	h.send("i=1; while [ $i -le 60 ]; do printf 'SBK_%d\\n' $i; i=$((i+1)); done; printf 'zq%sdone\\n' zq-\r")
+	if !h.waitFor("zqzq-done", 4*time.Second) {
 		t.Fatalf("bulk output never finished; got tail:\n%q", tail(h.screen(), 400))
 	}
 	// SBK_1 has long since scrolled past the live screen.
