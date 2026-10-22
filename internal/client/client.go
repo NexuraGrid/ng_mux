@@ -190,10 +190,11 @@ type keymap struct {
 }
 
 // enterAlt / exitAlt switch the host terminal to its alternate screen so the
-// user's shell scrollback is untouched while attached.
+// user's shell scrollback is untouched while attached. exitAlt also puts the
+// terminal's default cursor shape back, in case a pane's app changed it.
 const (
 	enterAlt = "\x1b[?1049h"
-	exitAlt  = "\x1b[?1049l\x1b[0m"
+	exitAlt  = "\x1b[?1049l\x1b[0m\x1b[0 q"
 )
 
 // Attach connects to the daemon at ep, attaches to the named session (empty

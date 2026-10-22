@@ -345,3 +345,43 @@ func TestComposeMonoThemeUsesNoColour(t *testing.T) {
 		t.Errorf("mono bar = %+v, want reverse video", c)
 	}
 }
+
+// Dim, hidden and strikethrough cells are painted with SGR 2, 8 and 9.
+func TestPaintEmitsDimHiddenStrike(t *testing.T) {
+	f := NewFrame(3, 1)
+	f.set(0, 0, Cell{Ch: 'a', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrDim, Width: 1})
+	f.set(1, 0, Cell{Ch: 'b', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrHidden, Width: 1})
+	f.set(2, 0, Cell{Ch: 'c', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrStrike, Width: 1})
+	out := string(Paint(nil, f))
+	for _, want := range []string{"\x1b[0;2;39;49ma", "\x1b[0;8;39;49mb", "\x1b[0;9;39;49mc"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("paint output lacks %q:\n%q", want, out)
+		}
+	}
+}
+
+// The focused pane's cursor shape is painted with DECSCUSR on a full paint
+// and whenever it changes, and not repeated while it stays the same.
+func TestPaintEmitsCursorStyleChanges(t *testing.T) {
+	snap := &vterm.Snapshot{Cols: 4, Rows: 2, Cells: make([]vterm.Cell, 8), CurVisible: true, CursorStyle: 6}
+	for i := range snap.Cells {
+		snap.Cells[i] = vterm.Cell{Ch: ' ', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Width: 1}
+	}
+	pane := PaneView{ID: 1, Rect: layout.Rect{W: 4, H: 2}, Snap: snap, Active: true}
+	f1 := Compose(4, 3, []PaneView{pane}, "", StatusStyle{})
+	if f1.CurStyle != 6 {
+		t.Fatalf("composed CurStyle = %d, want 6 from the focused pane", f1.CurStyle)
+	}
+	if out := string(Paint(nil, f1)); !strings.Contains(out, "\x1b[6 q") {
+		t.Fatalf("full paint lacks the cursor shape:\n%q", out)
+	}
+	f2 := &Frame{}
+	f2.CopyFrom(f1)
+	if out := Paint(f1, f2); strings.Contains(string(out), " q") {
+		t.Fatalf("unchanged frame repainted the cursor shape: %q", out)
+	}
+	f2.CurStyle = 2
+	if out := string(Paint(f1, f2)); !strings.Contains(out, "\x1b[2 q") {
+		t.Fatalf("changed shape not painted: %q", out)
+	}
+}

@@ -48,6 +48,9 @@ type View interface {
 	// CursorVisible returns the visible state of the cursor.
 	CursorVisible() bool
 
+	// CursorStyle returns the DECSCUSR cursor shape (0 = default).
+	CursorStyle() int
+
 	// Lock locks the state object's mutex.
 	Lock()
 
