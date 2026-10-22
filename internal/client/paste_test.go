@@ -73,3 +73,49 @@ func TestUnterminatedPasteReleasesKeyboard(t *testing.T) {
 		t.Fatalf("events = %q, want %q", got, want)
 	}
 }
+
+// A paste right after the prefix (which-key panel up) is not a command key:
+// it is dropped whole, and none of it reaches the pane.
+func TestPasteAfterPrefixIsDropped(t *testing.T) {
+	got := runInputEvents(t, keymap{prefix: DefaultPrefix}, "\x02\x1b[200~ls\r\x1b[201~\x02x")
+	want := []string{"exec:kill-pane"}
+	if !equalEvents(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+// A paste while the Ctrl-b m sheet is up dismisses it like any key, and none
+// of the pasted text reaches the pane.
+func TestPasteDismissesSessionSheet(t *testing.T) {
+	got := runInputEvents(t, keymap{prefix: DefaultPrefix}, "\x02m\x1b[200~ls\r\x1b[201~\x02x")
+	want := []string{"exec:kill-pane"}
+	if !equalEvents(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+// Arrow keys after the prefix still move focus.
+func TestArrowAfterPrefixStillMovesFocus(t *testing.T) {
+	got := runInputEvents(t, keymap{prefix: DefaultPrefix}, "\x02\x1b[A\x02\x1b[C")
+	want := []string{"exec:previous-pane", "exec:select-pane"}
+	if !equalEvents(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+// An arrow after the prefix that arrives split across reads (a slow link)
+// still moves focus instead of leaking "[A" into the pane.
+func TestSplitArrowAfterPrefixStillMovesFocus(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write([]byte("\x02\x1b"))
+		time.Sleep(10 * time.Millisecond)
+		_, _ = pw.Write([]byte("[A"))
+		pw.Close()
+	}()
+	got := runInputEventsFrom(t, keymap{prefix: DefaultPrefix}, pr)
+	want := []string{"exec:previous-pane"}
+	if !equalEvents(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
