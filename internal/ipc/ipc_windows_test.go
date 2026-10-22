@@ -3,6 +3,7 @@
 package ipc
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -33,12 +34,7 @@ func TestListenDialRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer l.Close()
-	go func() {
-		if c, err := l.Accept(); err == nil {
-			c.Close()
-		}
-	}()
+	holdAccepted(t, l)
 	c, err := Dial(ep)
 	if err != nil {
 		t.Fatalf("Dial to our own server: %v", err)
@@ -52,12 +48,7 @@ func TestCheckServerOwnerRefusesAnotherSID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer l.Close()
-	go func() {
-		if c, err := l.Accept(); err == nil {
-			c.Close()
-		}
-	}()
+	holdAccepted(t, l)
 	c, err := winio.DialPipe(pipeName(ep), nil)
 	if err != nil {
 		t.Fatalf("DialPipe: %v", err)
@@ -72,4 +63,26 @@ func TestCheckServerOwnerRefusesAnotherSID(t *testing.T) {
 	if err := checkServerOwner(c, system); err == nil || !strings.Contains(err.Error(), "another user") {
 		t.Fatalf("checkServerOwner = %v, want another-user refusal", err)
 	}
+}
+
+// holdAccepted serves one connection on l and keeps the server end open until
+// the test ends. Closing it right after Accept would disconnect the pipe
+// before the client's GetNamedPipeServerProcessId call, which then fails and
+// makes the owner check refuse a server that is really ours.
+func holdAccepted(t *testing.T, l net.Listener) {
+	t.Helper()
+	conns := make(chan net.Conn, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			conns <- c
+		}
+	}()
+	t.Cleanup(func() {
+		l.Close()
+		select {
+		case c := <-conns:
+			c.Close()
+		default:
+		}
+	})
 }
