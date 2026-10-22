@@ -75,7 +75,7 @@ func main() {
 	default:
 		// Anything else is treated as a command line for the running server,
 		// tmux-style: `ngmux new-window`, `ngmux send-keys -t 0 "ls" Enter`.
-		err = client.Exec(ep, strings.Join(os.Args[1:], " "))
+		err = client.Exec(ep, client.JoinArgs(os.Args[1:]))
 	}
 
 	if err != nil {
