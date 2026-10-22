@@ -7,7 +7,7 @@ Pick items from here into their own feature document when work resumes. Runner: 
 
 Validation (needs a human with the real environment)
 
-- B1 Test the P0/P1 build on real Windows (ConPTY) with the workers whose log output froze ngmux; confirm Ctrl-b d and Ctrl-C keep working under heavy logs.
+- B1 Partly checked (2026-10-22, user on real Windows): `new`, `attach`, Ctrl+V and Ctrl+C work; the heavy-log workers run is still pending. Test the P0/P1 build on real Windows (ConPTY) with the workers whose log output froze ngmux; confirm Ctrl-b d and Ctrl-C keep working under heavy logs.
 - B2 Done (2026-10-22): image paste works via Alt+V, drag-and-drop and the clipboard history; Ctrl+V and Ctrl+Shift+V do not (Windows Terminal takes them for text paste; Claude Code on Windows binds image paste to Alt+V). User: "funciona de 3 formas el pegaod de la imagen".
 
 P2 security (ngmux runs on shared servers)
@@ -42,12 +42,17 @@ Terminal fidelity
 
 Found while doing P2 and B15 (2026-10-22)
 
-- B16 Validate v0.9.1 on real Windows: `ngmux new`, `attach` and `ls` from a normal and from an elevated terminal. A non-elevated client may refuse a daemon started elevated ("cannot verify the owner of server process N"), because OpenProcessToken can be denied across integrity levels; if it happens, rework the owner check (e.g. compare the pipe's owner SID instead of opening the process token). `internal/ipc/ipc_windows.go` checkServerOwner.
+- B16 Partly checked (2026-10-22): non-elevated `new` and `attach` work; the elevated vs non-elevated run is still pending (user will do it later). Validate v0.9.1 on real Windows: `ngmux new`, `attach` and `ls` from a normal and from an elevated terminal. A non-elevated client may refuse a daemon started elevated ("cannot verify the owner of server process N"), because OpenProcessToken can be denied across integrity levels; if it happens, rework the owner check (e.g. compare the pipe's owner SID instead of opening the process token). `internal/ipc/ipc_windows.go` checkServerOwner.
 - B17 `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
 - B18 `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
 - B19 Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
 - B20 `TestRunDaemonLogsListenError` assumes `XDG_CACHE_HOME`, which macOS ignores (CI runs Linux and Windows only). `cmd/ngmux/daemon_log_test.go`.
 - B21 From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
+
+Session lifecycle (user report, 2026-10-22)
+
+- B22 Fixed on branch `fix/session-lifecycle`. On a fresh server, `ngmux new -t test` left two sessions, `0` and `test`; the user never created `0`. Only the first session of a new server; later `ngmux new -t test2` created just `test2`. Root cause: the daemon always created session `0` at startup (`internal/server/server.go` Run) before the client's attach created the one it named. Fix: no session up front; the first attach creates the one it names. Test: `TestFirstNamedSessionIsTheOnlyOne` (e2e).
+- B23 Fixed on branch `fix/session-lifecycle`. Closing a session (last window, `kill-session`) moved its attached clients into another live session instead of detaching them, so a careless user who keeps typing could kill a different session. User: "si soy una persona descuidada la peudo borrar eso es peligroso [...] despues de todo son sessiones distintas". Root cause: `sessionEmptied` in `internal/server/server.go` reassigned clients to a surviving session. Fix: detach them (bye), like tmux's default detach-on-destroy; the server still stops when no session is left. Tests: `TestSessionEmptiedDetachesItsClients`, `TestSessionEmptiedNeverMovesAClient`, `TestKillSessionDetachesItsClient` (e2e).
 
 Product
 
@@ -60,6 +65,7 @@ Product
 | - | B2 | - | done (user check) |
 | - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
 | - | B15 | inline | done, v0.9.1 (PR #37) |
+| - | B22-B23 | inline, `fix/session-lifecycle` | fixed, RED/GREEN observed, `go test -race ./...` green; not merged yet |
 | - | B1, B6-B14, B16-B21 | - | open, not planned yet |
 
 ## Log
@@ -68,3 +74,5 @@ Product
 - L2 P0 and P1 shipped through the stacked PRs to main and the v0.9.0 release.
 - L3 (2026-10-21, user): "anota eso de forma clara apra hacerlo y corregirlo por favor" (B15, zoxide/fzf colors).
 - L4 (2026-10-22, user): "Si por favor y guarda ya lo hecho y lo que falta y genera la release con los cmabios hechos hasta ahora". P2 (PR #36) and B15 (PR #37) merged to main and released as v0.9.1; B16-B21 added from the verifier and review advisories. Next: B16 (real Windows check), then B1.
+- L5 (2026-10-22, user): "Si por favor arregla los bugs y anota para que sepamos y nos quede como historial de que se detecto y que se van a corregir y en cuento a lo de la terminal elevada todavia no he hecho la prueba edspues la hago". Added B22-B23 (phantom session `0`, switch-on-close) and fixed them on `fix/session-lifecycle`; recorded the partial Windows checks in B1 and B16.
+- L6 (2026-10-22, user): "no tranquilo no se aplicara un comando para cerrar una session entera esa mejor asi como esta". Decision: no key binding to kill a whole session; it stays `Ctrl-b :` `kill-session` or `ngmux kill-session -t NAME`, so it cannot be triggered by accident.

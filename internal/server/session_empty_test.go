@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MauricioJC3/ng_mux/internal/protocol"
 )
@@ -21,32 +22,44 @@ func testClient(session string) *client {
 	return newClient(protocol.NewConn(nopRWC{}), session)
 }
 
-// TestSessionEmptiedMovesClientToSurvivor is the basic case: the session a
-// client is viewing empties, and the client is moved to one that still exists.
-func TestSessionEmptiedMovesClientToSurvivor(t *testing.T) {
+// TestSessionEmptiedDetachesItsClients: when the session a client is viewing
+// empties, that client is detached (sent a bye) instead of being moved into
+// another session, where it could kill something it never meant to touch.
+// Clients on other sessions are left alone.
+func TestSessionEmptiedDetachesItsClients(t *testing.T) {
 	srv, _ := newTestServer(t)
-	for _, n := range []string{"a", "b", "c"} {
+	for _, n := range []string{"a", "b"} {
 		if _, err := srv.getOrCreateSession(n); err != nil {
 			t.Fatalf("create %q: %v", n, err)
 		}
 	}
-	cl := testClient("b")
-	srv.addClient(cl)
+	onB, peerB := pipeClient(t, "b")
+	onA, peerA := pipeClient(t, "a")
+	srv.addClient(onB)
+	srv.addClient(onA)
+	colB, colA := collect(peerB, 0), collect(peerA, 0)
 
 	srv.sessionEmptied("b")
 
-	if got := cl.session(); got == "b" {
-		t.Fatalf("client still on the emptied session %q", got)
+	waitFor(t, func() bool { return colB.count(protocol.TypeBye) == 1 }, 2*time.Second)
+	if got := onB.session(); got != "" {
+		t.Fatalf("detached client still points at session %q", got)
 	}
-	if srv.sessionByName(cl.session()) == nil {
-		t.Fatalf("client points at %q, which is not a live session", cl.session())
+	if got := onA.session(); got != "a" {
+		t.Fatalf("client on a surviving session moved to %q", got)
+	}
+	if colA.count(protocol.TypeBye) != 0 {
+		t.Fatal("client on a surviving session was detached")
+	}
+	if srv.sessionByName("a") == nil {
+		t.Fatal("surviving session was removed")
 	}
 }
 
-// TestSessionEmptiedNeverStrandsAClient is the regression test for the race
-// where several sessions emptying at once could leave a client pointed at a
-// name already removed from the server. Run with -race.
-func TestSessionEmptiedNeverStrandsAClient(t *testing.T) {
+// TestSessionEmptiedNeverMovesAClient is the concurrent case: several sessions
+// emptying at once detach every one of their clients and never hand any of
+// them another session. Run with -race.
+func TestSessionEmptiedNeverMovesAClient(t *testing.T) {
 	srv, _ := newTestServer(t)
 	const n = 8
 	names := make([]string, n)
@@ -68,9 +81,12 @@ func TestSessionEmptiedNeverStrandsAClient(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i, c := range clients {
-		if got := srv.sessionByName(c.session()); got == nil {
-			t.Fatalf("client %d stranded on %q, which is not a live session", i, c.session())
+	for i, c := range clients[:n-1] {
+		if got := c.session(); got != "" {
+			t.Fatalf("client %d was moved to %q instead of detached", i, got)
 		}
+	}
+	if got := clients[n-1].session(); got != names[n-1] {
+		t.Fatalf("client on the surviving session moved to %q", got)
 	}
 }
