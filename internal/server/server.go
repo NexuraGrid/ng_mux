@@ -503,11 +503,15 @@ func (s *Server) tick() {
 			continue
 		}
 		// An app's OSC 52 copy goes to every viewer's clipboard, unless
-		// set-clipboard is off (then it is drained and dropped). Sent from a
-		// goroutine: a client with a full queue must not stall this tick.
+		// set-clipboard is off (then it is drained and dropped). Queued
+		// without waiting, so copies keep their order and a client whose
+		// queue is full (it stopped reading) cannot stall this tick; such a
+		// client just misses the copy.
 		if text := sess.takeClipboard(s.opts.setClipboard); text != "" && s.opts.setClipboard {
-			for _, c := range viewers {
-				go s.sendClipboard(c, text)
+			if seq := osc52(text); seq != nil {
+				for _, c := range viewers {
+					c.trySend(protocol.Message{Type: protocol.TypeSetClipboard, Data: seq})
+				}
 			}
 		}
 		need := clockTick || sess.dirty()

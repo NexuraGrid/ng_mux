@@ -35,3 +35,18 @@ func TestInnerAppClipboard(t *testing.T) {
 		t.Fatalf("read request produced clipboard %q, want none", got)
 	}
 }
+
+// A copy too big to hold whole is dropped rather than passed on cut short:
+// half a clipboard is worse than none.
+func TestOversizedClipboardIsDropped(t *testing.T) {
+	term := New(20, 2, nil)
+	huge := strings.Repeat("A", 160000) // more base64 than an OSC string holds
+	term.Write([]byte("\x1b]52;c;" + huge + "\a"))
+	if got := term.TakeClipboard(); got != "" {
+		t.Fatalf("oversized copy produced %d bytes of clipboard, want none", len(got))
+	}
+	term.Write([]byte("\x1b]52;c;aGk=\a")) // the next copy still works
+	if got := term.TakeClipboard(); got != "hi" {
+		t.Fatalf("clipboard after an oversized copy = %q, want %q", got, "hi")
+	}
+}

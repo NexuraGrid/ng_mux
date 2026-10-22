@@ -25,3 +25,23 @@ func TestRepeatLastCharacter(t *testing.T) {
 		t.Fatalf("row = %q, want %q", got, "a-----|")
 	}
 }
+
+// A full reset forgets the last printed character, so REP after it repeats
+// nothing.
+func TestResetForgetsRepeatCharacter(t *testing.T) {
+	term := New(20, 2, nil)
+	term.Write([]byte("a\x1bc\x1b[3b"))
+	if got := row0(term); got != "" {
+		t.Fatalf("row = %q, want empty", got)
+	}
+}
+
+// A full reset (ESC c) clears the whole screen, including columns beyond the
+// row count on a pane wider than it is tall.
+func TestResetClearsWholeScreen(t *testing.T) {
+	term := New(20, 2, nil)
+	term.Write([]byte("0123456789abcdef\x1bc"))
+	if got := row0(term); got != "" {
+		t.Fatalf("row after reset = %q, want empty", got)
+	}
+}

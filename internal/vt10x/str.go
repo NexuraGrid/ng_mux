@@ -16,6 +16,8 @@ type strEscape struct {
 	typ  rune
 	buf  []rune
 	args []string
+	// overflow is set when the string outgrew maxSTRLen and was cut short.
+	overflow bool
 }
 
 // maxSTRLen bounds one OSC/DCS string. It fits an OSC 52 clipboard copy of
@@ -31,12 +33,15 @@ func (s *strEscape) reset() {
 		s.buf = s.buf[:0]
 	}
 	s.args = nil
+	s.overflow = false
 }
 
 func (s *strEscape) put(c rune) {
 	// TODO: improve allocs with an array backed slice; bench first
 	if len(s.buf) < maxSTRLen {
 		s.buf = append(s.buf, c)
+	} else {
+		s.overflow = true
 	}
 	// Going by st, it is better to remain silent when the STR sequence is not
 	// ended so that it is apparent to users something is wrong. The length sanity
@@ -147,6 +152,9 @@ func (t *State) handleSTR() {
 			data := s.argString(2, "")
 			if t.onClipboard == nil || data == "" || data == "?" {
 				break // never answer a read: panes do not get the clipboard
+			}
+			if s.overflow {
+				break // cut short: half a copy is worse than none
 			}
 			text, err := base64.StdEncoding.DecodeString(data)
 			if err != nil {
