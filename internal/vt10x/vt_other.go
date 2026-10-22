@@ -18,6 +18,7 @@ type terminal struct {
 func newTerminal(info TerminalInfo) *terminal {
 	t := &terminal{newState(info.w, info.onScrollOut)}
 	t.onSync = info.onSync
+	t.onClipboard = info.onClipboard
 	t.init(info.cols, info.rows)
 	return t
 }

@@ -37,17 +37,20 @@ import (
 // "the emulator glitched and was reset" from an ordinary I/O error.
 var ErrEmulatorPanic = errors.New("vterm: recovered panic in terminal emulator")
 
-// newEmulator builds a vt10x terminal of the given size, wired to reply for
-// device-query responses (DA, DSR, ...) and to feed onScrollOut every line
-// that scrolls off the top of the main screen. It is the single constructor
-// used by both New and Write's panic-recovery path, so a freshly recovered
-// emulator never loses its scrollback capture wiring. reply is whatever
-// vt10x should write query responses to — always Term.replyQ (the async
-// queue), never the real pty master directly, and never reconstructed on
-// panic recovery so replies keep flowing through the same goroutine.
-func newEmulator(cols, rows int, reply io.Writer, onScrollOut func(ln []vt10x.Glyph), onSync func(on bool)) vt10x.Terminal {
-	opts := []vt10x.TerminalOption{vt10x.WithSize(cols, rows), vt10x.WithScrollback(onScrollOut), vt10x.WithSyncHook(onSync)}
-	if reply != nil {
+// newEmulator builds a vt10x terminal of the given size wired to t: query
+// replies (DA, DSR, ...) go to t.replyQ (the async queue, never the pty master
+// directly), every line scrolling off the main screen to t.pushHistory, and
+// synchronized-output and OSC 52 events to t.onSync and t.onClipboard. It is
+// the single constructor used by both New and Write's panic-recovery path, so
+// a freshly recovered emulator never loses any of that wiring.
+func (t *Term) newEmulator(cols, rows int) vt10x.Terminal {
+	opts := []vt10x.TerminalOption{
+		vt10x.WithSize(cols, rows),
+		vt10x.WithScrollback(t.pushHistory),
+		vt10x.WithSyncHook(t.onSync),
+		vt10x.WithClipboardHook(t.onClipboard),
+	}
+	if reply := t.queueWriter(); reply != nil {
 		opts = append(opts, vt10x.WithWriter(reply))
 	}
 	return vt10x.New(opts...)
@@ -177,6 +180,12 @@ type Term struct {
 	frozen   Snapshot
 	frozenOn bool
 	frozenAt time.Time
+
+	// clip is the text the app last copied with OSC 52, not yet taken by
+	// TakeClipboard; hasClip mirrors clip != "" for a lock-free check.
+	// clip is guarded by mu.
+	clip    string
+	hasClip atomic.Bool
 }
 
 // New creates an emulator of the given size. reply receives the bytes the
@@ -197,7 +206,7 @@ func New(cols, rows int, reply io.Writer) *Term {
 	if reply != nil {
 		t.replyQ = newReplyQueue(reply)
 	}
-	t.t = newEmulator(cols, rows, t.queueWriter(), t.pushHistory, t.onSync)
+	t.t = t.newEmulator(cols, rows)
 	return t
 }
 
@@ -272,7 +281,7 @@ func (t *Term) Write(p []byte) (n int, err error) {
 	// goroutine.
 	defer func() {
 		if r := recover(); r != nil {
-			t.t = newEmulator(t.cols, t.rows, t.queueWriter(), t.pushHistory, t.onSync)
+			t.t = t.newEmulator(t.cols, t.rows)
 			t.dirty.Store(true)
 			t.pending = t.pending[:0]
 			t.frozenOn = false
@@ -685,3 +694,25 @@ func convAttr(mode int16) uint16 {
 // syncTimeout bounds how long a synchronized update (DEC mode 2026) may hold
 // back a pane's screen, so an app that never ends one cannot freeze it.
 const syncTimeout = 200 * time.Millisecond
+
+// TakeClipboard returns the text the app last copied with OSC 52 and forgets
+// it, or "" if it copied nothing since the last call. The server's
+// broadcaster calls it for every pane on every tick, so the common nothing-
+// copied case is a lock-free flag check.
+func (t *Term) TakeClipboard() string {
+	if !t.hasClip.Load() {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	text := t.clip
+	t.clip = ""
+	t.hasClip.Store(false)
+	return text
+}
+
+// onClipboard is vt10x's OSC 52 hook. It runs inside t.t.Write with t.mu held.
+func (t *Term) onClipboard(text string) {
+	t.clip = text
+	t.hasClip.Store(true)
+}

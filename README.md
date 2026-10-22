@@ -260,8 +260,11 @@ Turn it `off` to give that row back to the panes.
 
 `set-clipboard` (default `on`) also copies a copy-mode yank to the system
 clipboard using an OSC 52 escape, so `Ctrl-b ]` is not the only way to get it
-back. Turn it `off` if your terminal does not support OSC 52 or you would
-rather ngmux never touch the clipboard.
+back. It also passes on copies made by apps inside a pane (Claude Code, nvim,
+a nested tmux) with their own OSC 52, which then land in the paste buffer
+too; ngmux never answers an app's request to read the clipboard. Turn it
+`off` if your terminal does not support OSC 52 or you would rather ngmux
+never touch the clipboard; apps' copies are then ignored.
 
 Unknown lines are logged and skipped, never fatal.
 

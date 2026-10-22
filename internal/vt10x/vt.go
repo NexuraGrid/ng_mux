@@ -65,6 +65,16 @@ type TerminalInfo struct {
 	cols, rows  int
 	onScrollOut func(ln []Glyph)
 	onSync      func(on bool)
+	onClipboard func(text string)
+}
+
+// WithClipboardHook registers a hook called with the decoded text of each
+// OSC 52 clipboard write from the app. It runs inside Write with the
+// terminal locked. Clipboard read requests are never answered.
+func WithClipboardHook(fn func(text string)) TerminalOption {
+	return func(info *TerminalInfo) {
+		info.onClipboard = fn
+	}
 }
 
 // WithSyncHook registers a hook for synchronized output (DEC mode 2026): it
