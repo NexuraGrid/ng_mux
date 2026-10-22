@@ -422,7 +422,14 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 			case isQuick && km.binds[string(rune(cmd))] == "":
 				commandPrompt(br, out, pc, quick, settle)
 			case cmd == 0x1b:
-				if line, ok := arrowCommand(br); ok {
+				seq := readEscBody(br)
+				if string(seq) == pasteStartSeq {
+					// A paste is not a command key: drop it whole so
+					// none of it reaches the pane as typed keys.
+					_ = readPaste(br, nil, func([]byte) error { return nil })
+					continue
+				}
+				if line, ok := arrowCommand(bytes.NewReader(seq[1:])); ok {
 					pc.Write(protocol.Message{Type: protocol.TypeExec, Name: line})
 				}
 			case cmd == 'm' && km.binds["m"] == "":
@@ -431,7 +438,13 @@ func forwardInput(br *inReader, out *lockedWriter, term *os.File, pc *protocol.C
 				// from painting over it while it is up.
 				overlay.Store(true)
 				hideHelp := showSessionHelp(out, term, pal)
-				_, _ = br.ReadByte()
+				// Any key dismisses it; a paste does too, consumed whole so
+				// none of it reaches the pane.
+				if b, err := br.ReadByte(); err == nil && b == 0x1b {
+					if string(readEscBody(br)) == pasteStartSeq {
+						_ = readPaste(br, nil, func([]byte) error { return nil })
+					}
+				}
 				hideHelp()
 				overlay.Store(false)
 				pc.Write(protocol.Message{Type: protocol.TypeRefresh})
@@ -570,6 +583,29 @@ func readPaste(br *inReader, start []byte, emit func([]byte) error) error {
 	return emit(buf)
 }
 
+// escBodyWait is how long readEscBody waits for each next byte of a sequence,
+// so one split across reads (a slow SSH link) is still read whole, while a
+// lone Esc costs at most this long.
+const escBodyWait = 50 * time.Millisecond
+
+// readEscBody returns the escape sequence whose ESC was just read, ESC
+// included: the bytes up to a CSI's final byte, or the one byte after a lone
+// ESC, stopping early if the next byte takes longer than escBodyWait.
+func readEscBody(br *inReader) []byte {
+	seq := []byte{0x1b}
+	for {
+		nb, ok := br.ReadByteTimeout(escBodyWait)
+		if !ok {
+			break
+		}
+		seq = append(seq, nb)
+		if (len(seq) == 2 && nb != '[') || (len(seq) > 2 && isCSIFinal(nb)) {
+			break
+		}
+	}
+	return seq
+}
+
 // partialSuffix is the length of the longest suffix of b that is a proper
 // prefix of marker: the bytes to hold back so marker is never split.
 func partialSuffix(b, marker []byte) int {
@@ -681,15 +717,7 @@ func commandPrompt(br *inReader, out *lockedWriter, pc *protocol.Conn, spec prom
 			pc.Write(protocol.Message{Type: protocol.TypeRefresh})
 			return line
 		case 0x1b: // Esc: cancel (swallow a following arrow-key body if any)
-			seq := []byte{0x1b}
-			for br.Buffered() > 0 {
-				nb, _ := br.ReadByte()
-				seq = append(seq, nb)
-				if (len(seq) == 2 && nb != '[') || (len(seq) > 2 && isCSIFinal(nb)) {
-					break
-				}
-			}
-			if string(seq) == pasteStartSeq {
+			if string(readEscBody(br)) == pasteStartSeq {
 				// A paste types its text into the prompt, up to its first
 				// line break; it never cancels or submits it.
 				lineDone := false
