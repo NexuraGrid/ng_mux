@@ -12,12 +12,12 @@ Validation (needs a human with the real environment)
 
 P2 security (ngmux runs on shared servers)
 
-- B3 Windows named pipe uses the default DACL (Everyone can open it for reading) and a predictable name `\\.\pipe\ngmux-<USERNAME>-<name>`, so another local user can create it first (pipe squatting) and receive the victim's keystrokes. Fix: explicit SDDL limited to the user's SID, and verify the server process owner on Dial. `internal/ipc/ipc_windows.go`.
-- B4 Unix socket dir falls back to `/tmp/ngmux-<uid>` when `XDG_RUNTIME_DIR` is unset (Docker, no systemd) and `MkdirAll` does not check who owns an existing dir. Fix: lstat, require owner == uid and mode 0700, refuse otherwise (as tmux does). `internal/ipc/ipc_unix.go`.
+- B3 Done in v0.9.1 (PR #36); still needs the real-Windows check in B16. Windows named pipe uses the default DACL (Everyone can open it for reading) and a predictable name `\\.\pipe\ngmux-<USERNAME>-<name>`, so another local user can create it first (pipe squatting) and receive the victim's keystrokes. Fix: explicit SDDL limited to the user's SID, and verify the server process owner on Dial. `internal/ipc/ipc_windows.go`.
+- B4 Done in v0.9.1 (PR #36). Unix socket dir falls back to `/tmp/ngmux-<uid>` when `XDG_RUNTIME_DIR` is unset (Docker, no systemd) and `MkdirAll` does not check who owns an existing dir. Fix: lstat, require owner == uid and mode 0700, refuse otherwise (as tmux does). `internal/ipc/ipc_unix.go`.
 
 P2 diagnostics
 
-- B5 Daemon startup errors go to `/dev/null`, not the daemon log (seen with a socket path over 108 bytes: `bind: invalid argument`). Fix: open the log before listening and log the error; have the client print the log path when the daemon does not come up. `cmd/ngmux/main.go`, `cmd/ngmux/spawn_*.go`.
+- B5 Done in v0.9.1 (PR #36). Daemon startup errors go to `/dev/null`, not the daemon log (seen with a socket path over 108 bytes: `bind: invalid argument`). Fix: open the log before listening and log the error; have the client print the log path when the daemon does not come up. `cmd/ngmux/main.go`, `cmd/ngmux/spawn_*.go`.
 
 Review advisories left open (native RDD reviews review-a405a61d835cd501 and review-6f9c64037469dbad, end-of-feature verifier)
 
@@ -35,10 +35,19 @@ Performance
 
 Terminal fidelity
 
-- B15 Fixed on branch `fix/sgr-empty-params` (2026-10-22, not merged yet): root cause was the CSI parser stopping at an empty parameter, and fzf starts nearly every SGR with one (`ESC[;1;38;5;161;48;5;236m`, also when re-sending the preview's `ls` colors), so SGR became a plain reset. Verified with real fzf 0.74.5 and GNU ls output through the emulator. Not caused by env (pane has TERM=xterm-256color, COLORTERM=truecolor). The truecolor-below-256 collision and colon SGR below are still open. Original report: `zi` (zoxide interactive, fzf) loses its colors inside ngmux; in a plain terminal the same command shows them. User report (2026-10-21): "cuadno busco algo por zi dentro de ngmux no aparecen los colores [...] quita los colores y la persona no peude saber bien a cual proyecto va a entrar porque aparece un blanco super raro". Observed in ngmux vs plain terminal (screenshots, `zi ng`): the selected row has no highlight background, the red pointer/gutter bar becomes a white bar on every row, and the preview (`ls --color` of the directory) shows directories uncolored. The shell prompt keeps its colors, so plain 16-color SGR works. Acceptance: `zi` inside ngmux looks like in the plain terminal (selected-row highlight, colored gutter/pointer, colored preview).
+- B15 Done in v0.9.1 (PR #37, 2026-10-22): root cause was the CSI parser stopping at an empty parameter, and fzf starts nearly every SGR with one (`ESC[;1;38;5;161;48;5;236m`, also when re-sending the preview's `ls` colors), so SGR became a plain reset. Verified with real fzf 0.74.5 and GNU ls output through the emulator. Not caused by env (pane has TERM=xterm-256color, COLORTERM=truecolor). The truecolor-below-256 collision and colon SGR below are still open. Original report: `zi` (zoxide interactive, fzf) loses its colors inside ngmux; in a plain terminal the same command shows them. User report (2026-10-21): "cuadno busco algo por zi dentro de ngmux no aparecen los colores [...] quita los colores y la persona no peude saber bien a cual proyecto va a entrar porque aparece un blanco super raro". Observed in ngmux vs plain terminal (screenshots, `zi ng`): the selected row has no highlight background, the red pointer/gutter bar becomes a white bar on every row, and the preview (`ls --color` of the directory) shows directories uncolored. The shell prompt keeps its colors, so plain 16-color SGR works. Acceptance: `zi` inside ngmux looks like in the plain terminal (selected-row highlight, colored gutter/pointer, colored preview).
   - First step: reproduce and compare `env | rg 'TERM|COLOR'` inside and outside ngmux, and capture fzf's raw output (`script`) in both to see whether fzf emits no colors (environment/detection: `NO_COLOR`, `TERM`, `COLORTERM`; fzf in no-color mode looks exactly like the screenshot) or ngmux drops/misrenders them.
   - Pane env: `internal/ptyx/ptyx.go:83` appends `TERM=xterm-256color` after `os.Environ()`, so the daemon's own `TERM` (and any `NO_COLOR`) also reaches the pane, and `COLORTERM` is never set.
   - Emulator: `internal/vt10x/state.go:746-783` stores truecolor as `Color(r<<16|g<<8|b)` in the same space as palette indexes, so any RGB value below 256 (e.g. `#0000c8`) is rendered as palette color N (`internal/render/render.go:709`, `internal/vterm/vterm.go:665` test `< 256`). Colon-separated SGR (`38:2::r:g:b`) is not parsed.
+
+Found while doing P2 and B15 (2026-10-22)
+
+- B16 Validate v0.9.1 on real Windows: `ngmux new`, `attach` and `ls` from a normal and from an elevated terminal. A non-elevated client may refuse a daemon started elevated ("cannot verify the owner of server process N"), because OpenProcessToken can be denied across integrity levels; if it happens, rework the owner check (e.g. compare the pipe's owner SID instead of opening the process token). `internal/ipc/ipc_windows.go` checkServerOwner.
+- B17 `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
+- B18 `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
+- B19 Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
+- B20 `TestRunDaemonLogsListenError` assumes `XDG_CACHE_HOME`, which macOS ignores (CI runs Linux and Windows only). `cmd/ngmux/daemon_log_test.go`.
+- B21 From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
 
 Product
 
@@ -48,11 +57,14 @@ Product
 
 | ID | Specs | Route | Status |
 |----|-------|-------|--------|
-| - | B3-B5 | - | moved to `odd/tasks/p2-hardening.md` |
-| - | B1, B6-B15 | - | open, not planned yet |
+| - | B2 | - | done (user check) |
+| - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
+| - | B15 | inline | done, v0.9.1 (PR #37) |
+| - | B1, B6-B14, B16-B21 | - | open, not planned yet |
 
 ## Log
 
 - L1 (2026-10-21, user): "anota por favor lo que falta osea el ps2 y los demas para continuar despues por favor"
 - L2 P0 and P1 shipped through the stacked PRs to main and the v0.9.0 release.
 - L3 (2026-10-21, user): "anota eso de forma clara apra hacerlo y corregirlo por favor" (B15, zoxide/fzf colors).
+- L4 (2026-10-22, user): "Si por favor y guarda ya lo hecho y lo que falta y genera la release con los cmabios hechos hasta ahora". P2 (PR #36) and B15 (PR #37) merged to main and released as v0.9.1; B16-B21 added from the verifier and review advisories. Next: B16 (real Windows check), then B1.
