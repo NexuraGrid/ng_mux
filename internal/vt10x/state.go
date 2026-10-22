@@ -20,6 +20,13 @@ const (
 	attrWrap
 )
 
+// Further SGR attributes, above the wide-glyph bits (Mode is an int16).
+const (
+	attrDim    = 1 << 9  // SGR 2, faint
+	attrHidden = 1 << 10 // SGR 8, concealed
+	attrStrike = 1 << 11 // SGR 9, crossed out
+)
+
 // AttrWide marks the lead cell of a double-width glyph; AttrWideTail marks the
 // blank spacer cell that follows it. They are exported so a renderer can lay a
 // wide glyph across two columns and skip its spacer. (Upstream vt10x has no
@@ -292,16 +299,12 @@ func (t *State) setChar(c rune, attr *Glyph, x, y int) {
 	}
 	t.changed |= ChangedScreen
 	t.dirty[y] = true
+	// The glyph keeps its colors and attribute bits as given. Upstream vt10x
+	// brightened bold colors 0-7 and pre-swapped FG/BG for reverse here, but
+	// ngmux re-emits bold and reverse (SGR 1, 7) to the real terminal, so
+	// baking them in too forced bright colors and cancelled reverse out.
 	t.lines[y][x] = *attr
 	t.lines[y][x].Char = c
-	//if t.options.BrightBold && attr.Mode&attrBold != 0 && attr.FG < 8 {
-	if attr.Mode&attrBold != 0 && attr.FG < 8 {
-		t.lines[y][x].FG = attr.FG + 8
-	}
-	if attr.Mode&attrReverse != 0 {
-		t.lines[y][x].FG = attr.BG
-		t.lines[y][x].BG = attr.FG
-	}
 }
 
 func (t *State) defaultCursor() Cursor {
@@ -673,11 +676,18 @@ func (t *State) setAttr(attr []int) {
 		a := attr[i]
 		switch a {
 		case 0:
-			t.cur.Attr.Mode &^= attrReverse | attrUnderline | attrBold | attrItalic | attrBlink
+			t.cur.Attr.Mode &^= attrReverse | attrUnderline | attrBold | attrItalic | attrBlink |
+				attrDim | attrHidden | attrStrike
 			t.cur.Attr.FG = DefaultFG
 			t.cur.Attr.BG = DefaultBG
 		case 1:
 			t.cur.Attr.Mode |= attrBold
+		case 2:
+			t.cur.Attr.Mode |= attrDim
+		case 8:
+			t.cur.Attr.Mode |= attrHidden
+		case 9:
+			t.cur.Attr.Mode |= attrStrike
 		case 3:
 			t.cur.Attr.Mode |= attrItalic
 		case 4:
@@ -686,8 +696,8 @@ func (t *State) setAttr(attr []int) {
 			t.cur.Attr.Mode |= attrBlink
 		case 7:
 			t.cur.Attr.Mode |= attrReverse
-		case 21, 22:
-			t.cur.Attr.Mode &^= attrBold
+		case 21, 22: // normal intensity: neither bold nor dim
+			t.cur.Attr.Mode &^= attrBold | attrDim
 		case 23:
 			t.cur.Attr.Mode &^= attrItalic
 		case 24:
@@ -696,6 +706,10 @@ func (t *State) setAttr(attr []int) {
 			t.cur.Attr.Mode &^= attrBlink
 		case 27:
 			t.cur.Attr.Mode &^= attrReverse
+		case 28:
+			t.cur.Attr.Mode &^= attrHidden
+		case 29:
+			t.cur.Attr.Mode &^= attrStrike
 		case 38:
 			if i+2 < len(attr) && attr[i+1] == 5 {
 				i += 2

@@ -649,6 +649,9 @@ func writeSGR(b *bytes.Buffer, c Cell) {
 	if c.Attr&vterm.AttrBold != 0 {
 		b.WriteString(";1")
 	}
+	if c.Attr&vterm.AttrDim != 0 {
+		b.WriteString(";2")
+	}
 	if c.Attr&vterm.AttrItalic != 0 {
 		b.WriteString(";3")
 	}
@@ -660,6 +663,12 @@ func writeSGR(b *bytes.Buffer, c Cell) {
 	}
 	if c.Attr&vterm.AttrReverse != 0 {
 		b.WriteString(";7")
+	}
+	if c.Attr&vterm.AttrHidden != 0 {
+		b.WriteString(";8")
+	}
+	if c.Attr&vterm.AttrStrike != 0 {
+		b.WriteString(";9")
 	}
 	writeColor(b, c.FG, true)
 	writeColor(b, c.BG, false)

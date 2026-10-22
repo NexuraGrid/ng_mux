@@ -61,6 +61,9 @@ const (
 	AttrBold
 	AttrItalic
 	AttrBlink
+	AttrDim    // SGR 2, faint
+	AttrHidden // SGR 8, concealed
+	AttrStrike // SGR 9, crossed out
 )
 
 // ColorDefault marks a cell colour as "use the terminal default". It sits
@@ -594,6 +597,9 @@ func convAttr(mode int16) uint16 {
 		vtBold      = 1 << 2
 		vtItalic    = 1 << 4
 		vtBlink     = 1 << 5
+		vtDim       = 1 << 9
+		vtHidden    = 1 << 10
+		vtStrike    = 1 << 11
 	)
 	var a uint16
 	if mode&vtReverse != 0 {
@@ -610,6 +616,15 @@ func convAttr(mode int16) uint16 {
 	}
 	if mode&vtBlink != 0 {
 		a |= AttrBlink
+	}
+	if mode&vtDim != 0 {
+		a |= AttrDim
+	}
+	if mode&vtHidden != 0 {
+		a |= AttrHidden
+	}
+	if mode&vtStrike != 0 {
+		a |= AttrStrike
 	}
 	return a
 }

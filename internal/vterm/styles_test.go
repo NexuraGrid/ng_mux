@@ -1,0 +1,51 @@
+package vterm
+
+import "testing"
+
+// cellAt feeds s to a fresh terminal and returns the cell at (x, 0).
+func cellAt(t *testing.T, s string, x int) Cell {
+	t.Helper()
+	term := New(20, 2, nil)
+	if _, err := term.Write([]byte(s)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	snap := term.Snapshot()
+	return snap.At(x, 0)
+}
+
+// Dim (SGR 2), hidden (8) and strikethrough (9) are kept on the cells they
+// style, and their resets (22, 28, 29) clear them, as in a plain terminal.
+func TestDimHiddenStrikeAttributes(t *testing.T) {
+	const s = "\x1b[2mA\x1b[22mB\x1b[8mC\x1b[28mD\x1b[9mE\x1b[29mF\x1b[1;2mG\x1b[22mH"
+	for _, tt := range []struct {
+		x    int
+		want uint16
+	}{
+		{0, AttrDim}, {1, 0},
+		{2, AttrHidden}, {3, 0},
+		{4, AttrStrike}, {5, 0},
+		{6, AttrBold | AttrDim}, {7, 0}, // 22 clears both bold and dim
+	} {
+		if got := cellAt(t, s, tt.x).Attr; got != tt.want {
+			t.Errorf("cell %d (%q) attr = %#x, want %#x", tt.x, rune('A'+tt.x), got, tt.want)
+		}
+	}
+}
+
+// Reverse video keeps the cell's own colors and only marks it reversed; the
+// real terminal does the swap. Swapping here as well cancelled it out.
+func TestReverseKeepsColors(t *testing.T) {
+	c := cellAt(t, "\x1b[31;42;7mX", 0)
+	if c.FG != 1 || c.BG != 2 || c.Attr != AttrReverse {
+		t.Fatalf("cell = fg %d bg %d attr %#x, want fg 1 bg 2 attr reverse", c.FG, c.BG, c.Attr)
+	}
+}
+
+// Bold does not turn colors 0-7 into their bright variants: whether bold text
+// is also brightened is the real terminal's setting.
+func TestBoldKeepsColor(t *testing.T) {
+	c := cellAt(t, "\x1b[1;31mX", 0)
+	if c.FG != 1 || c.Attr != AttrBold {
+		t.Fatalf("cell = fg %d attr %#x, want fg 1 (red) attr bold", c.FG, c.Attr)
+	}
+}

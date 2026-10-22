@@ -345,3 +345,17 @@ func TestComposeMonoThemeUsesNoColour(t *testing.T) {
 		t.Errorf("mono bar = %+v, want reverse video", c)
 	}
 }
+
+// Dim, hidden and strikethrough cells are painted with SGR 2, 8 and 9.
+func TestPaintEmitsDimHiddenStrike(t *testing.T) {
+	f := NewFrame(3, 1)
+	f.set(0, 0, Cell{Ch: 'a', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrDim, Width: 1})
+	f.set(1, 0, Cell{Ch: 'b', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrHidden, Width: 1})
+	f.set(2, 0, Cell{Ch: 'c', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Attr: vterm.AttrStrike, Width: 1})
+	out := string(Paint(nil, f))
+	for _, want := range []string{"\x1b[0;2;39;49ma", "\x1b[0;8;39;49mb", "\x1b[0;9;39;49mc"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("paint output lacks %q:\n%q", want, out)
+		}
+	}
+}
