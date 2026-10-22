@@ -28,7 +28,14 @@ func socketDir() (string, error) {
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(dir, 0o700); err == nil {
+		// A dir we just created is ours; force 0700 past the umask or a
+		// default ACL on base. An existing dir is never chmod'ed: it is
+		// checked below and refused if wrong.
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return "", err
+		}
+	} else if !os.IsExist(err) {
 		return "", err
 	}
 	info, err := os.Lstat(dir)

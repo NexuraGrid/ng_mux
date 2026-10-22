@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -113,4 +114,19 @@ func TestListenDialRoundTrip(t *testing.T) {
 		t.Fatalf("Dial: %v", err)
 	}
 	c.Close()
+}
+
+// A umask (or a default POSIX ACL on the base dir) can strip bits from the
+// dir socketDir creates; a dir we just made is ours and must end up 0700.
+func TestSocketDirNormalizesFreshDirMode(t *testing.T) {
+	want := runtimeDir(t)
+	old := syscall.Umask(0o277)
+	defer syscall.Umask(old)
+	got, err := socketDir()
+	if err != nil {
+		t.Fatalf("socketDir under umask 0277: %v", err)
+	}
+	if info, _ := os.Lstat(want); got != want || info.Mode().Perm() != 0o700 {
+		t.Fatalf("socketDir = %q mode %v, want %q 0700", got, info.Mode().Perm(), want)
+	}
 }
