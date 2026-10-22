@@ -62,7 +62,7 @@ func (s *session) mouse(kind string, x, y, button int) bool {
 func (s *session) mouseAs(ms *mouseState, kind string, x, y, button int) (repaint bool, yanked string) {
 	p, data, repaint := s.routeMouse(ms, kind, x, y, button)
 	if p != nil && len(data) > 0 {
-		_, _ = p.pt.Write(data)
+		p.write(data)
 	}
 	yanked, ms.copied = ms.copied, ""
 	return repaint, yanked

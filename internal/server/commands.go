@@ -279,7 +279,7 @@ func cmdSendKeys(c *cmdCtx) (string, error) {
 	// Write outside the session lock: a child that is not reading its stdin
 	// can block this for as long as it likes.
 	if target != nil {
-		_, _ = target.pt.Write(data)
+		target.write(data)
 	}
 	return "", nil
 }
@@ -313,7 +313,7 @@ func cmdPasteBuffer(c *cmdCtx) (string, error) {
 	// Write outside the session lock, like send-keys: a large paste into a
 	// child that is not reading would otherwise freeze the session.
 	if target != nil {
-		_, _ = target.pt.Write([]byte(buf))
+		target.write([]byte(buf))
 	}
 	return "", nil
 }

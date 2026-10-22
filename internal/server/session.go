@@ -339,7 +339,7 @@ func (s *session) input(data []byte) (repaint bool, yanked string) {
 		return true, text
 	}
 	if p != nil {
-		_, _ = p.pt.Write(data)
+		p.write(data)
 	}
 	return false, ""
 }
