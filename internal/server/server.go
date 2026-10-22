@@ -100,13 +100,8 @@ func Run(ep ipc.Endpoint, initCols, initRows int, logger *log.Logger) error {
 	}
 	srv.ln = ln
 
-	// Start with one session so `ngmux new` has something to attach to.
-	if _, err := srv.getOrCreateSession(defaultSessionName); err != nil {
-		ln.Close()
-		ipc.Remove(ep)
-		return err
-	}
-
+	// No session is created up front: the first attach creates the one it
+	// names, so `ngmux new -s test` on a fresh server leaves only "test".
 	go srv.acceptLoop()
 	go srv.broadcastLoop()
 
@@ -173,9 +168,10 @@ func (s *Server) hasSession(name string) bool {
 }
 
 // sessionEmptied is invoked by a session when its last window closes. It drops
-// the session and, under the same lock, moves any client that was viewing it to
-// a surviving session so a burst of sessions emptying together can never leave a
-// client pointed at a name that is already gone.
+// the session and detaches every client that was viewing it, like tmux's
+// default detach-on-destroy: moving them into another session would let a user
+// who keeps typing kill a session they never meant to touch. When no session
+// is left the server stops.
 func (s *Server) sessionEmptied(name string) {
 	s.mu.Lock()
 	if sess, ok := s.sessions[name]; ok {
@@ -189,25 +185,18 @@ func (s *Server) sessionEmptied(name string) {
 		sess.shutdown()
 	}
 
-	// Pick a surviving session to move orphaned clients onto. Walk s.order
-	// rather than trusting s.order[0] so a stale entry can't be handed out.
-	fallback := ""
-	for _, n := range s.order {
-		if _, ok := s.sessions[n]; ok {
-			fallback = n
-			break
-		}
-	}
-	if fallback == "" {
+	if len(s.sessions) == 0 {
 		s.mu.Unlock()
 		s.quit()
 		return
 	}
 
+	// Point detached clients at no session ("" is never a session name) so a
+	// new session reusing the name can't be shown to them before they go.
 	for c := range s.clients {
 		if c.session() == name {
-			c.setSession(fallback)
-			c.reset()
+			c.setSession("")
+			c.send(protocol.Message{Type: protocol.TypeBye})
 		}
 	}
 	s.mu.Unlock()

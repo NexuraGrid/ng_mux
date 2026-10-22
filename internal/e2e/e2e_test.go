@@ -85,6 +85,13 @@ func (h *harness) logText() string {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessOn(t, "")
+}
+
+// newHarnessOn is newHarness with the first client attaching to the named
+// session ("" means the default one).
+func newHarnessOn(t *testing.T, session string) *harness {
+	t.Helper()
 	// The daemon runs in-process here and starts panes with $SHELL. Force a
 	// plain POSIX shell so a developer's interactive rc files (prompt wizards,
 	// Nerd-Font checks, etc.) cannot take over the pane and break assertions.
@@ -143,7 +150,7 @@ func newHarness(t *testing.T) *harness {
 		}
 	}()
 
-	go func() { h.cliErr <- client.Attach(ep, "", slave, slave) }()
+	go func() { h.cliErr <- client.Attach(ep, session, slave, slave) }()
 
 	t.Cleanup(func() {
 		killServer(ep)
@@ -294,6 +301,57 @@ func TestKillLastWindowEndsSessionAndClient(t *testing.T) {
 		t.Fatal("client did not exit after the last window was killed")
 	}
 	h.cliErr <- nil // let cleanup's receive proceed
+}
+
+// listSessions asks the daemon for its session names over a throwaway connection.
+func listSessions(t *testing.T, ep ipc.Endpoint) []string {
+	t.Helper()
+	conn, err := ipc.Dial(ep)
+	if err != nil {
+		t.Fatalf("dial list: %v", err)
+	}
+	defer conn.Close()
+	pc := protocol.NewConn(conn)
+	if err := pc.Write(protocol.Message{Type: protocol.TypeListReq}); err != nil {
+		t.Fatalf("list write: %v", err)
+	}
+	reply, err := pc.Read()
+	if err != nil {
+		t.Fatalf("list read: %v", err)
+	}
+	names := make([]string, 0, len(reply.Sessions))
+	for _, s := range reply.Sessions {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+// TestFirstNamedSessionIsTheOnlyOne: `ngmux new -t test` on a fresh server must
+// create just "test", not an extra unrequested "0" alongside it.
+func TestFirstNamedSessionIsTheOnlyOne(t *testing.T) {
+	h := newHarnessOn(t, "test")
+	time.Sleep(300 * time.Millisecond)
+	if got := listSessions(t, h.ep); len(got) != 1 || got[0] != "test" {
+		t.Fatalf("sessions = %v, want [test]", got)
+	}
+}
+
+// TestKillSessionDetachesItsClient: killing the session a client is viewing
+// detaches that client instead of moving it into another session.
+func TestKillSessionDetachesItsClient(t *testing.T) {
+	h := newHarness(t) // client on session "0"
+	time.Sleep(300 * time.Millisecond)
+	execCmd(t, h.ep, "new-session -s other")
+	execCmd(t, h.ep, "kill-session -t 0")
+	select {
+	case <-h.cliErr:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("client was not detached; sessions = %v", listSessions(t, h.ep))
+	}
+	h.cliErr <- nil // let cleanup's receive proceed
+	if got := listSessions(t, h.ep); len(got) != 1 || got[0] != "other" {
+		t.Fatalf("sessions = %v, want [other]", got)
+	}
 }
 
 func TestNamedSessionAppearsInList(t *testing.T) {
