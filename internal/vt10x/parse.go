@@ -18,11 +18,6 @@ func (t *State) parse(c rune) {
 		t.newline(true)
 	}
 
-	if t.mode&ModeInsert != 0 && t.cur.X+1 < t.cols {
-		// TODO: move shiz, look at st.c:2458
-		t.logln("insert mode not implemented")
-	}
-
 	// A double-width glyph cannot straddle the right margin: wrap first so it
 	// starts on the next line, the way xterm does.
 	wide := RuneWidth(c) == 2
@@ -31,7 +26,14 @@ func (t *State) parse(c rune) {
 		t.newline(true)
 	}
 
+	if t.mode&ModeInsert != 0 {
+		// IRM: make room by shifting the rest of the line right; what falls
+		// off the right margin is lost, as in xterm.
+		t.insertBlanks(RuneWidth(c))
+	}
+
 	t.setChar(c, &t.cur.Attr, t.cur.X, t.cur.Y)
+	t.lastChar = c
 
 	if wide && t.cur.X+1 < t.cols {
 		// The lead cell carries the glyph and AttrWide; the next cell is a

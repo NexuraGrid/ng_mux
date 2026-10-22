@@ -119,7 +119,8 @@ type State struct {
 	tabs          []bool
 	title         string
 	colorOverride map[Color]Color
-	cursorStyle   int // DECSCUSR Ps: 0 default, 1-6 block/underline/bar
+	cursorStyle   int  // DECSCUSR Ps: 0 default, 1-6 block/underline/bar
+	lastChar      rune // last printed graphic character, repeated by REP
 
 	// onScrollOut, when set, is called with each line as it leaves the top of
 	// the screen: a full-screen scroll on the main buffer (bottom-margin

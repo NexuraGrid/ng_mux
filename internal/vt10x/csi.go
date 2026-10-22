@@ -258,6 +258,14 @@ func (t *State) handleCSI() {
 		case 6: // CPR - cursor position report
 			t.w.Write([]byte(fmt.Sprintf("\033[%d;%dR", t.cur.Y+1, t.cur.X+1)))
 		}
+	case 'b': // REP - repeat the last printed character <n> times
+		if c.marked || t.lastChar == 0 {
+			goto unknown
+		}
+		// Bounded by the screen: more repeats than cells only rewrite them.
+		for n := min(c.arg(0, 1), t.cols*t.rows); n > 0; n-- {
+			t.parse(t.lastChar)
+		}
 	case 'r': // DECSTBM - set scrolling region
 		if c.priv {
 			goto unknown
