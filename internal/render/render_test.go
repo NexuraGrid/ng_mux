@@ -359,3 +359,29 @@ func TestPaintEmitsDimHiddenStrike(t *testing.T) {
 		}
 	}
 }
+
+// The focused pane's cursor shape is painted with DECSCUSR on a full paint
+// and whenever it changes, and not repeated while it stays the same.
+func TestPaintEmitsCursorStyleChanges(t *testing.T) {
+	snap := &vterm.Snapshot{Cols: 4, Rows: 2, Cells: make([]vterm.Cell, 8), CurVisible: true, CursorStyle: 6}
+	for i := range snap.Cells {
+		snap.Cells[i] = vterm.Cell{Ch: ' ', FG: vterm.ColorDefault, BG: vterm.ColorDefault, Width: 1}
+	}
+	pane := PaneView{ID: 1, Rect: layout.Rect{W: 4, H: 2}, Snap: snap, Active: true}
+	f1 := Compose(4, 3, []PaneView{pane}, "", StatusStyle{})
+	if f1.CurStyle != 6 {
+		t.Fatalf("composed CurStyle = %d, want 6 from the focused pane", f1.CurStyle)
+	}
+	if out := string(Paint(nil, f1)); !strings.Contains(out, "\x1b[6 q") {
+		t.Fatalf("full paint lacks the cursor shape:\n%q", out)
+	}
+	f2 := &Frame{}
+	f2.CopyFrom(f1)
+	if out := Paint(f1, f2); strings.Contains(string(out), " q") {
+		t.Fatalf("unchanged frame repainted the cursor shape: %q", out)
+	}
+	f2.CurStyle = 2
+	if out := string(Paint(f1, f2)); !strings.Contains(out, "\x1b[2 q") {
+		t.Fatalf("changed shape not painted: %q", out)
+	}
+}

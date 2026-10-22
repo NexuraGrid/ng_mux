@@ -49,3 +49,25 @@ func TestBoldKeepsColor(t *testing.T) {
 		t.Fatalf("cell = fg %d attr %#x, want fg 1 (red) attr bold", c.FG, c.Attr)
 	}
 }
+
+// DECSCUSR (CSI Ps SP q) sets the cursor shape apps like vim and Claude Code
+// switch between; CSI Ps q without the space is a different command (DECLL)
+// and leaves it alone.
+func TestCursorStyleFollowsDECSCUSR(t *testing.T) {
+	term := New(20, 2, nil)
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{
+		{"", 0},
+		{"\x1b[5 q", 5},
+		{"\x1b[1q", 5},
+		{"\x1b[2 q", 2},
+		{"\x1b[0 q", 0},
+	} {
+		term.Write([]byte(tt.in))
+		if got := term.Snapshot().CursorStyle; got != tt.want {
+			t.Fatalf("after %q CursorStyle = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}

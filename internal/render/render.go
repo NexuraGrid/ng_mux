@@ -36,6 +36,8 @@ type Frame struct {
 	Cells      []Cell
 	CurX, CurY int
 	CurVisible bool
+	// CurStyle is the cursor shape (DECSCUSR Ps) of the focused pane.
+	CurStyle int
 
 	// covered is border-detection scratch, reused across ComposeInto calls on
 	// the same Frame so a per-tick repaint allocates nothing.
@@ -55,7 +57,7 @@ func NewFrame(cols, rows int) *Frame {
 // already the right length.
 func (f *Frame) reset(cols, rows int) {
 	f.Cols, f.Rows = cols, rows
-	f.CurX, f.CurY, f.CurVisible = 0, 0, false
+	f.CurX, f.CurY, f.CurVisible, f.CurStyle = 0, 0, false, 0
 	if len(f.Cells) != cols*rows {
 		f.Cells = make([]Cell, cols*rows)
 	}
@@ -69,7 +71,7 @@ func (f *Frame) reset(cols, rows int) {
 // it was sent, so later diffs never depend on a session's reusable buffers.
 func (f *Frame) CopyFrom(src *Frame) {
 	f.Cols, f.Rows = src.Cols, src.Rows
-	f.CurX, f.CurY, f.CurVisible = src.CurX, src.CurY, src.CurVisible
+	f.CurX, f.CurY, f.CurVisible, f.CurStyle = src.CurX, src.CurY, src.CurVisible, src.CurStyle
 	if cap(f.Cells) < len(src.Cells) {
 		f.Cells = make([]Cell, len(src.Cells))
 	} else {
@@ -285,6 +287,7 @@ func ComposeThemedInto(dst *Frame, cols, rows int, panes []PaneView, status []St
 		f.CurX = active.Rect.X + active.Snap.CurX
 		f.CurY = active.Rect.Y + active.Snap.CurY
 		f.CurVisible = true
+		f.CurStyle = active.Snap.CursorStyle
 	}
 	return f
 }
@@ -619,12 +622,18 @@ func Paint(prev, next *Frame) []byte {
 		}
 	}
 
-	if prev != nil && !changed && prev.CurVisible == next.CurVisible &&
+	if prev != nil && !changed && prev.CurVisible == next.CurVisible && prev.CurStyle == next.CurStyle &&
 		(!next.CurVisible || (prev.CurX == next.CurX && prev.CurY == next.CurY)) {
 		return nil
 	}
 
 	b.WriteString("\x1b[0m")
+	if prev == nil || prev.CurStyle != next.CurStyle {
+		// DECSCUSR: the focused pane's cursor shape (0 = terminal default).
+		b.WriteString("\x1b[")
+		b.WriteString(strconv.Itoa(next.CurStyle))
+		b.WriteString(" q")
+	}
 	if next.CurVisible {
 		b.WriteString("\x1b[")
 		b.WriteString(strconv.Itoa(next.CurY + 1))

@@ -26,6 +26,9 @@ type csiEscape struct {
 	// "ESC[>4;2m" is XTMODKEYS, not SGR, and "ESC[>1u" is a kitty keyboard
 	// push, not DECRC.
 	marked bool
+	// inter is the intermediate byte (0x20-0x2F) just before the final byte,
+	// or 0. "ESC[5 q" (DECSCUSR) is a different command from "ESC[5q".
+	inter byte
 }
 
 func (c *csiEscape) reset() {
@@ -35,6 +38,7 @@ func (c *csiEscape) reset() {
 	c.priv = false
 	c.gt = false
 	c.marked = false
+	c.inter = 0
 }
 
 func (c *csiEscape) put(b byte) bool {
@@ -68,6 +72,10 @@ func (c *csiEscape) parse() {
 	}
 	c.marked = len(s) < len(c.buf) // a marker byte was stripped
 	s = s[:len(s)-1]
+	if n := len(s); n > 0 && s[n-1] >= 0x20 && s[n-1] <= 0x2F {
+		c.inter = s[n-1]
+		s = s[:n-1]
+	}
 	ss := strings.Split(s, ";")
 	for _, p := range ss {
 		i, err := strconv.Atoi(p)
@@ -117,6 +125,16 @@ func (c *csiEscape) maxarg(i, def int) int {
 
 func (t *State) handleCSI() {
 	c := &t.csi
+	if c.inter != 0 {
+		// An intermediate byte makes a different command from the plain
+		// final byte ("ESC[5 @" is SL, not ICH). DECSCUSR is the only one
+		// handled; the rest are ignored rather than run as the wrong thing.
+		if c.inter == ' ' && c.mode == 'q' && !c.marked {
+			t.cursorStyle = min(c.arg(0, 0), 6)
+			return
+		}
+		goto unknown
+	}
 	switch c.mode {
 	default:
 		goto unknown

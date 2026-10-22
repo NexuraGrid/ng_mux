@@ -33,6 +33,10 @@ Working now:
   as ngmux keys (a `Ctrl-b` inside a paste does nothing), and apps that ask for
   bracketed paste (shells, vim, Claude Code) get the paste markers, so a
   multi-line paste is not run line by line. `Ctrl-b ]` pastes the same way
+- **text styles and cursor shape as the app sent them**: bold, dim, italic,
+  underline, reverse, hidden and strikethrough, with the app's own colors, and
+  the cursor shape it picks (block, underline, bar); detaching restores your
+  terminal's default cursor
 - **double-width characters** (CJK, emoji) render across two columns in panes and the status bar
 - **config file** (`~/.config/ngmux/ngmux.conf`): custom prefix key, key
   bindings, history limit, default shell, status-bar colours

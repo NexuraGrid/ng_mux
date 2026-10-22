@@ -103,6 +103,9 @@ type Snapshot struct {
 	Cells      []Cell // row-major, len == Cols*Rows
 	CurX, CurY int
 	CurVisible bool
+	// CursorStyle is the DECSCUSR shape the app asked for (CSI Ps SP q):
+	// 0 = the terminal's default, 1-6 = blinking/steady block, underline, bar.
+	CursorStyle int
 
 	// Title is the window title the program last set (OSC 0/2), or "" if it
 	// never set one.
@@ -453,6 +456,7 @@ func (t *Term) SnapshotInto(dst *Snapshot) {
 	dst.Cols, dst.Rows = cols, rows
 	dst.Title = t.t.Title()
 	dst.CurVisible = t.t.CursorVisible()
+	dst.CursorStyle = t.t.CursorStyle()
 	cur := t.t.Cursor()
 	dst.CurX, dst.CurY = cur.X, cur.Y
 	for y := 0; y < rows; y++ {

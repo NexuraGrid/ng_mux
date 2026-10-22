@@ -118,6 +118,7 @@ type State struct {
 	tabs          []bool
 	title         string
 	colorOverride map[Color]Color
+	cursorStyle   int // DECSCUSR Ps: 0 default, 1-6 block/underline/bar
 
 	// onScrollOut, when set, is called with each line as it leaves the top of
 	// the screen: a full-screen scroll on the main buffer (bottom-margin
@@ -208,6 +209,12 @@ func (t *State) Mode() ModeFlag {
 // Title returns the current title set via the tty.
 func (t *State) Title() string {
 	return t.title
+}
+
+// CursorStyle returns the cursor shape set with DECSCUSR (CSI Ps SP q):
+// 0 for the terminal's default, 1-6 for block, underline or bar.
+func (t *State) CursorStyle() int {
+	return t.cursorStyle
 }
 
 /*
@@ -326,6 +333,7 @@ func (t *State) reset() {
 	t.top = 0
 	t.bottom = t.rows - 1
 	t.mode = ModeWrap
+	t.cursorStyle = 0
 	t.clear(0, 0, t.rows-1, t.cols-1)
 	t.moveTo(0, 0)
 }

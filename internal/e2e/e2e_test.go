@@ -569,3 +569,18 @@ func TestBracketedPasteEndToEnd(t *testing.T) {
 	}
 	h.refute("200~", 200*time.Millisecond)
 }
+
+// TestCursorShapeEndToEnd: a shape the pane's app sets reaches the real
+// terminal, and detaching puts the terminal's default shape back.
+func TestCursorShapeEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	h.send("printf '\\033[5 q'\r")
+	if !h.waitFor("\x1b[5 q", 3*time.Second) {
+		t.Fatalf("cursor shape never reached the terminal; got:\n%q", h.screen())
+	}
+	h.reset()
+	h.send("\x02d")
+	if !h.waitFor("\x1b[0 q", 3*time.Second) {
+		t.Fatalf("detach did not restore the default cursor shape; got:\n%q", h.screen())
+	}
+}
