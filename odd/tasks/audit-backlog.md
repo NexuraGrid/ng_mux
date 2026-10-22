@@ -51,8 +51,8 @@ Found while doing P2 and B15 (2026-10-22)
 
 Session lifecycle (user report, 2026-10-22)
 
-- B22 Fixed on branch `fix/session-lifecycle`. On a fresh server, `ngmux new -t test` left two sessions, `0` and `test`; the user never created `0`. Only the first session of a new server; later `ngmux new -t test2` created just `test2`. Root cause: the daemon always created session `0` at startup (`internal/server/server.go` Run) before the client's attach created the one it named. Fix: no session up front; the first attach creates the one it names. Test: `TestFirstNamedSessionIsTheOnlyOne` (e2e).
-- B23 Fixed on branch `fix/session-lifecycle`. Closing a session (last window, `kill-session`) moved its attached clients into another live session instead of detaching them, so a careless user who keeps typing could kill a different session. User: "si soy una persona descuidada la peudo borrar eso es peligroso [...] despues de todo son sessiones distintas". Root cause: `sessionEmptied` in `internal/server/server.go` reassigned clients to a surviving session. Fix: detach them (bye), like tmux's default detach-on-destroy; the server still stops when no session is left. Tests: `TestSessionEmptiedDetachesItsClients`, `TestSessionEmptiedNeverMovesAClient`, `TestKillSessionDetachesItsClient` (e2e).
+- B22 Fixed in PR #38. On a fresh server, `ngmux new -t test` left two sessions, `0` and `test`; the user never created `0`. Only the first session of a new server; later `ngmux new -t test2` created just `test2`. Root cause: the daemon always created session `0` at startup (`internal/server/server.go` Run) before the client's attach created the one it named. Fix: no session up front; the first attach creates the one it names. Test: `TestFirstNamedSessionIsTheOnlyOne` (e2e).
+- B23 Fixed in PR #38. Closing a session (last window, `kill-session`) moved its attached clients into another live session instead of detaching them, so a careless user who keeps typing could kill a different session. User: "si soy una persona descuidada la peudo borrar eso es peligroso [...] despues de todo son sessiones distintas". Root cause: `sessionEmptied` in `internal/server/server.go` reassigned clients to a surviving session. Fix: detach them (bye), like tmux's default detach-on-destroy; the server still stops when no session is left. Tests: `TestSessionEmptiedDetachesItsClients`, `TestSessionEmptiedNeverMovesAClient`, `TestKillSessionDetachesItsClient` (e2e).
 
 Product
 
@@ -65,7 +65,7 @@ Product
 | - | B2 | - | done (user check) |
 | - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
 | - | B15 | inline | done, v0.9.1 (PR #37) |
-| - | B22-B23 | inline, `fix/session-lifecycle` | fixed, RED/GREEN observed, `go test -race ./...` green; not merged yet |
+| - | B22-B23 | inline, `fix/session-lifecycle` | done, PR #38 (merged 2026-10-22), not released yet |
 | - | B1, B6-B14, B16-B21 | - | open, not planned yet |
 
 ## Log
