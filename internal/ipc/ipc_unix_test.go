@@ -130,3 +130,23 @@ func TestSocketDirNormalizesFreshDirMode(t *testing.T) {
 		t.Fatalf("socketDir = %q mode %v, want %q 0700", got, info.Mode().Perm(), want)
 	}
 }
+
+// TestSocketDirAcceptsRacingFreshDir is B19: another ngmux started at the same
+// moment under umask 0277 has just created the dir (mode 0500) but not yet
+// chmod'ed it. The dir is ours and owner-only, so it must be accepted and
+// brought to 0700, not refused as unsafe.
+func TestSocketDirAcceptsRacingFreshDir(t *testing.T) {
+	dir := runtimeDir(t)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := socketDir(); err != nil {
+		t.Fatalf("socketDir on our own 0500 dir: %v", err)
+	}
+	if info, _ := os.Lstat(dir); info.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700", info.Mode().Perm())
+	}
+}
