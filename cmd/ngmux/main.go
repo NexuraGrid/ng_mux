@@ -11,6 +11,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -161,6 +162,11 @@ func cmdNew(ep ipc.Endpoint, args []string) error {
 		return err
 	}
 	if _, err := ipc.Dial(ep); err != nil {
+		// Anything but "nobody is listening" (e.g. an unsafe socket dir) is
+		// fatal: spawning a daemon would only hit the same error, unseen.
+		if !errors.Is(err, ipc.ErrNoServer) {
+			return err
+		}
 		if err := startDaemon(ep); err != nil {
 			return err
 		}
@@ -247,13 +253,16 @@ func cmdKillServer(ep ipc.Endpoint) error {
 	return nil
 }
 
+// daemonStartTimeout is how long startDaemon waits for the daemon's socket.
+const daemonStartTimeout = 5 * time.Second
+
 // startDaemon spawns a detached copy of this binary running `__server` and
 // waits for its socket to come up.
 func startDaemon(ep ipc.Endpoint) error {
 	if err := spawnDaemon(ep); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonStartTimeout)
 	for time.Now().Before(deadline) {
 		if conn, err := ipc.Dial(ep); err == nil {
 			conn.Close()
@@ -261,7 +270,7 @@ func startDaemon(ep ipc.Endpoint) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	return fmt.Errorf("daemon did not come up within 5s")
+	return daemonStartError(ep.Name)
 }
 
 // runDaemon is the daemon's main function (the `__server` subcommand).
@@ -292,7 +301,13 @@ func runDaemon(ep ipc.Endpoint) error {
 		// previous behavior rather than running completely silent.
 		logger = log.New(os.Stderr, "ngmuxd ", log.LstdFlags)
 	}
-	return server.Run(ep, 80, 24, logger)
+	// Run's error (a failed Listen, say) would otherwise only reach main's
+	// stderr, which is the null device for a spawned daemon.
+	if err := server.Run(ep, 80, 24, logger); err != nil {
+		logger.Printf("exit: %v", err)
+		return err
+	}
+	return nil
 }
 
 // maxDaemonLogSize is the size threshold, checked once at startup, past which
@@ -353,4 +368,15 @@ func openDaemonLog(epName string) (*os.File, error) {
 		return nil, err
 	}
 	return openDaemonLogFile(daemonLogPath(cacheDir, epName))
+}
+
+// daemonStartError is what the client reports when the daemon never starts
+// listening. The daemon's stdio is the null device, so its log file is the
+// only place the real cause (e.g. a failed bind) can be read.
+func daemonStartError(epName string) error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("daemon did not come up within %v", daemonStartTimeout)
+	}
+	return fmt.Errorf("daemon did not come up within %v (see %s)", daemonStartTimeout, daemonLogPath(cacheDir, epName))
 }

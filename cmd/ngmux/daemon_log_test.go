@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/MauricioJC3/ng_mux/internal/ipc"
 )
 
 func TestDaemonLogPath(t *testing.T) {
@@ -155,5 +158,46 @@ func TestOpenDaemonLogFileKeepsSmallLog(t *testing.T) {
 	}
 	if string(data) != "existing\nmore\n" {
 		t.Fatalf("content = %q, want existing content preserved and appended to", data)
+	}
+}
+
+// TestRunDaemonLogsListenError reproduces B5: a socket path over the Unix
+// limit makes Listen fail with "bind: invalid argument". The daemon's stderr
+// is /dev/null, so the error must land in its log file.
+func TestRunDaemonLogsListenError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("socket path length limit is Unix-only")
+	}
+	t.Setenv(nestGuardEnv, "")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Cleanup(func() { _ = debug.SetCrashOutput(nil, debug.CrashOptions{}) })
+
+	name := strings.Repeat("x", 120)
+	if err := runDaemon(ipc.Endpoint{Name: name}); err == nil {
+		t.Fatal("runDaemon succeeded with a socket path over the Unix limit")
+	}
+	data, err := os.ReadFile(daemonLogPath(cache, name))
+	if err != nil {
+		t.Fatalf("read daemon log: %v", err)
+	}
+	if !strings.Contains(string(data), "invalid argument") {
+		t.Fatalf("daemon log lacks the listen error:\n%s", data)
+	}
+}
+
+func TestDaemonStartErrorNamesLogPath(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Skipf("no user cache dir: %v", err)
+	}
+
+	err = daemonStartError("default")
+	want := daemonLogPath(cache, "default")
+	if !strings.Contains(err.Error(), "daemon did not come up within 5s") || !strings.Contains(err.Error(), want) {
+		t.Fatalf("daemonStartError = %q, want the 5s message and %q", err, want)
 	}
 }

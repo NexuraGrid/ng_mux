@@ -8,7 +8,7 @@ Pick items from here into their own feature document when work resumes. Runner: 
 Validation (needs a human with the real environment)
 
 - B1 Test the P0/P1 build on real Windows (ConPTY) with the workers whose log output froze ngmux; confirm Ctrl-b d and Ctrl-C keep working under heavy logs.
-- B2 Test image paste into Claude Code inside ngmux on Windows (Ctrl+V / Alt+V, and drag-and-drop of an image file).
+- B2 Done (2026-10-22): image paste works via Alt+V, drag-and-drop and the clipboard history; Ctrl+V and Ctrl+Shift+V do not (Windows Terminal takes them for text paste; Claude Code on Windows binds image paste to Alt+V). User: "funciona de 3 formas el pegaod de la imagen".
 
 P2 security (ngmux runs on shared servers)
 
@@ -48,7 +48,8 @@ Product
 
 | ID | Specs | Route | Status |
 |----|-------|-------|--------|
-| - | B1-B15 | - | open, not planned yet |
+| - | B3-B5 | - | moved to `odd/tasks/p2-hardening.md` |
+| - | B1, B6-B15 | - | open, not planned yet |
 
 ## Log
 
