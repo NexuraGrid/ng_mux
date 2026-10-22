@@ -712,7 +712,7 @@ func writeColor(b *bytes.Buffer, color uint32, fg bool) {
 		} else {
 			fmt.Fprintf(b, ";48;5;%d", color)
 		}
-	default: // packed 0xRRGGBB
+	default: // vterm.ColorRGB | 0xRRGGBB
 		r, g, bl := (color>>16)&0xff, (color>>8)&0xff, color&0xff
 		if fg {
 			fmt.Fprintf(b, ";38;2;%d;%d;%d", r, g, bl)

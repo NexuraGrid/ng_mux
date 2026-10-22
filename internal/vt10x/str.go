@@ -197,7 +197,7 @@ func (t *State) setColorName(j int, p *string) error {
 		if err != nil {
 			return err
 		}
-		t.colorOverride[Color(j)] = Color(r<<16 | g<<8 | b)
+		t.colorOverride[Color(j)] = RGB(r, g, b)
 	}
 
 	return nil

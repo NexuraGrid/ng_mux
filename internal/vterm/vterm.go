@@ -74,12 +74,19 @@ const (
 // above the 0xRRGGBB truecolor range so it can never collide with a real one.
 const ColorDefault uint32 = 1 << 24
 
+// ColorRGB tags a cell colour as a packed 0xRRGGBB truecolor value, keeping it
+// apart from palette indexes: without it #0000c8 would read as palette 200.
+const ColorRGB uint32 = 1 << 25
+
+// RGB returns the truecolor cell colour r, g, b (each 0-255).
+func RGB(r, g, b uint32) uint32 { return ColorRGB | r<<16 | g<<8 | b }
+
 // Cell is one character position in the emulator grid. Width is 2 for the lead
 // cell of a double-width glyph, 0 for the spacer cell that follows it, and 1
 // for every ordinary cell.
 type Cell struct {
 	Ch    rune
-	FG    uint32 // palette index [0,256) or ColorDefault or (>=256) packed 0xRRGGBB
+	FG    uint32 // palette index [0,256), ColorDefault, or ColorRGB|0xRRGGBB
 	BG    uint32
 	Attr  uint16
 	Width uint8
@@ -662,9 +669,9 @@ func convColor(c vt10x.Color) uint32 {
 	switch {
 	case c == vt10x.DefaultFG || c == vt10x.DefaultBG || c == vt10x.DefaultCursor:
 		return ColorDefault
+	case c.IsRGB():
+		return ColorRGB | c.Packed()
 	case uint32(c) < 256:
-		return uint32(c)
-	case uint32(c) < 1<<24:
 		return uint32(c)
 	default:
 		return ColorDefault
