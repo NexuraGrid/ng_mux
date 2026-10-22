@@ -24,6 +24,15 @@ type fakePty struct {
 	mu         sync.Mutex
 	written    bytes.Buffer
 	cols, rows int
+
+	// stall, when non-nil, makes Write block until it is closed (or the pty
+	// is), like a child that stopped reading its stdin. Set before use.
+	stall chan struct{}
+
+	// queued, when set, reports the bytes still waiting in the owning pane's
+	// input queue, so sentToChild can wait for writes already handed to the
+	// pane to land instead of racing its writer goroutine.
+	queued func() int
 }
 
 func newFakePty(cols, rows int) *fakePty {
@@ -57,6 +66,12 @@ func (f *fakePty) Read(p []byte) (int, error) {
 }
 
 func (f *fakePty) Write(p []byte) (int, error) {
+	if f.stall != nil {
+		select {
+		case <-f.stall:
+		case <-f.closed:
+		}
+	}
 	select {
 	case <-f.closed:
 		return 0, io.ErrClosedPipe
@@ -67,7 +82,15 @@ func (f *fakePty) Write(p []byte) (int, error) {
 	return f.written.Write(p)
 }
 
+// sentToChild returns everything written to the child so far, after waiting
+// (briefly) for the pane's input queue to deliver what it already holds.
 func (f *fakePty) sentToChild() string {
+	if f.queued != nil {
+		deadline := time.Now().Add(time.Second)
+		for f.queued() > 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.written.String()
@@ -306,6 +329,7 @@ func (ff *fakeFleet) factory() paneFactory {
 		sc := newFakeScreen(cols, rows)
 		sc.SetHistoryLimit(hist)
 		p := &pane{id: id, pt: pt, vt: sc}
+		pt.queued = p.in.pending
 		ff.mu.Lock()
 		ff.panes = append(ff.panes, &fakePane{id: id, pt: pt, scr: sc, p: p})
 		ff.mu.Unlock()

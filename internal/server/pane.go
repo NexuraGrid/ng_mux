@@ -63,6 +63,10 @@ type pane struct {
 	vt   screen
 	copy *copyState
 
+	// in carries keystrokes, pastes and mouse reports to pt without ever
+	// making the sender wait on a child that is not reading (see write).
+	in inputQueue
+
 	// output is set by pump whenever the pty produces bytes. The status bar
 	// reads it to flag activity in windows that are not on screen, and clears
 	// it while the pane's window is the one being shown. Unlike vt.Dirty it is
@@ -148,6 +152,17 @@ func (p *pane) feed(data []byte) {
 	}
 }
 
+// write queues data for the pane's child and returns immediately; the bytes
+// reach the pty in order once the child reads its stdin. Every input path
+// (keys, send-keys, paste-buffer, mouse reports) goes through here so none of
+// them can stall the client or command that produced it. Input that does not
+// fit in the queue (see maxPendingInput) is dropped and logged.
+func (p *pane) write(data []byte) {
+	if !p.in.push(p.pt, data) && p.logf != nil {
+		p.logf("pane %d: input queue full or closed, dropped %d bytes", p.id, len(data))
+	}
+}
+
 func (p *pane) resize(cols, rows int) {
 	p.vt.Resize(cols, rows)
 	_ = p.pt.Resize(cols, rows)
@@ -187,6 +202,7 @@ func (p *pane) copyKey(data []byte) (yank string, exited bool) {
 }
 
 func (p *pane) close() {
+	p.in.close()
 	_ = p.pt.Close()
 	p.vt.Close()
 }
