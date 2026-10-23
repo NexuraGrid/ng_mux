@@ -43,11 +43,11 @@ Terminal fidelity
 Found while doing P2 and B15 (2026-10-22)
 
 - B16 Partly checked (2026-10-22): non-elevated `new` and `attach` work; the elevated vs non-elevated run is still pending (user will do it later). Validate v0.9.1 on real Windows: `ngmux new`, `attach` and `ls` from a normal and from an elevated terminal. A non-elevated client may refuse a daemon started elevated ("cannot verify the owner of server process N"), because OpenProcessToken can be denied across integrity levels; if it happens, rework the owner check (e.g. compare the pipe's owner SID instead of opening the process token). `internal/ipc/ipc_windows.go` checkServerOwner.
-- B17 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
-- B18 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
-- B19 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
+- B17 Fixed in PR #39 (`odd/tasks/real-bugs-b17-b21.md`). `ngmux ls`, `attach`, `kill-session` and `kill-server` turn every Dial error into "no server running", so an unsafe socket dir or a foreign pipe owner only shows up through `ngmux new`. `cmd/ngmux/main.go`.
+- B18 Fixed in PR #39 (`odd/tasks/real-bugs-b17-b21.md`). `ngmux send-keys "echo a b" Enter` from the shell loses the quoting (client.Exec joins os.Args with spaces), so the pane gets a broken command; `ngmux run 'send-keys "echo a b" Enter'` works. `cmd/ngmux/main.go` default case.
+- B19 Fixed in PR #39 (`odd/tasks/real-bugs-b17-b21.md`). Two `ngmux` started at once under a restrictive umask can race `Mkdir`/`Chmod` of a fresh socket dir and one refuses it as unsafe. `internal/ipc/ipc_unix.go`.
 - B20 `TestRunDaemonLogsListenError` assumes `XDG_CACHE_HOME`, which macOS ignores (CI runs Linux and Windows only). `cmd/ngmux/daemon_log_test.go`.
-- B21 Fixed on branch `fix/real-bugs-b17-b21` (`odd/tasks/real-bugs-b17-b21.md`). From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
+- B21 Fixed in PR #39 (`odd/tasks/real-bugs-b17-b21.md`). From B15: a truecolor value below 256 (e.g. `#0000c8`) is rendered as palette color N, and colon SGR sub-parameters (`38:2::r:g:b`) stop parsing. `internal/vt10x/state.go`, `internal/vt10x/csi.go`.
 
 Session lifecycle (user report, 2026-10-22)
 
@@ -66,7 +66,7 @@ Product
 | - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
 | - | B15 | inline | done, v0.9.1 (PR #37) |
 | - | B22-B23 | inline, `fix/session-lifecycle` | done, PR #38 (merged 2026-10-22), not released yet |
-| - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | fixed on `fix/real-bugs-b17-b21`, not merged yet |
+| - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | done, PR #39 (merged 2026-10-22), not released yet |
 | - | B1, B6-B14, B16, B20 | - | open, not planned yet |
 
 ## Log
