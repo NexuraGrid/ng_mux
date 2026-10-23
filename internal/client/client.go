@@ -277,6 +277,28 @@ func Attach(ep ipc.Endpoint, session string, in, out *os.File) error {
 
 var errDetached = errors.New("detached")
 
+// JoinArgs builds a command line for Exec from shell arguments, quoting each
+// one the server's tokenizer would otherwise split or strip, so
+// `ngmux send-keys "echo a b" Enter` delivers "echo a b" as one token. Plain
+// arguments pass through unchanged.
+func JoinArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = quoteArg(a)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// quoteArg single-quotes a when it is empty or holds whitespace or a quote.
+// The tokenizer has no escapes but joins adjacent quoted segments, so an
+// embedded ' is written as '"'"'.
+func quoteArg(a string) string {
+	if a != "" && !strings.ContainsAny(a, " \t\"'") {
+		return a
+	}
+	return "'" + strings.ReplaceAll(a, "'", `'"'"'`) + "'"
+}
+
 // Exec sends a one-shot command line to the daemon and prints its reply. It
 // does not attach. Used by the `ngmux <command>` CLI form.
 func Exec(ep ipc.Endpoint, line string) error {

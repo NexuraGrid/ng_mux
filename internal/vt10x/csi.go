@@ -85,6 +85,14 @@ func (c *csiEscape) parse() {
 			c.args = append(c.args, argDefault)
 			continue
 		}
+		if strings.Contains(p, ":") {
+			args, ok := colonArgs(p)
+			if !ok {
+				break
+			}
+			c.args = append(c.args, args...)
+			continue
+		}
 		i, err := strconv.Atoi(p)
 		if err != nil {
 			//t.logf("invalid CSI arg '%s'\n", p)
@@ -100,6 +108,45 @@ func (c *csiEscape) parse() {
 		// clamp their own inputs as defense in depth.
 		c.args = append(c.args, clampArg(i))
 	}
+}
+
+// colonArgs expands an SGR parameter with ':' sub-parameters (ITU T.416) into
+// the equivalent ';' parameters, so "38:2::r:g:b" sets the same color as
+// "38;2;r;g;b" instead of stopping the parse. Handled: 38/48 with :2:[cs:]r:g:b
+// or :5:n, and the underline style 4:n (4:0 is off). A malformed 38/48 is
+// dropped; any other parameter keeps only its main value. ok is false when
+// the main value is not a number.
+func colonArgs(p string) (args []int, ok bool) {
+	sub := strings.Split(p, ":")
+	n := make([]int, len(sub))
+	for i, s := range sub {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			if i == 0 {
+				return nil, false
+			}
+			v = 0 // an empty sub-parameter, e.g. the color space in 38:2::r:g:b
+		}
+		n[i] = clampArg(v)
+	}
+	switch n[0] {
+	case 38, 48:
+		switch {
+		case len(n) == 3 && n[1] == 5:
+			return []int{n[0], 5, n[2]}, true
+		case len(n) == 5 && n[1] == 2:
+			return []int{n[0], 2, n[2], n[3], n[4]}, true
+		case len(n) == 6 && n[1] == 2:
+			return []int{n[0], 2, n[3], n[4], n[5]}, true
+		}
+		return nil, true
+	case 4:
+		if len(n) > 1 && n[1] == 0 {
+			return []int{24}, true
+		}
+		return []int{4}, true
+	}
+	return n[:1], true
 }
 
 // maxCSIArg bounds a single CSI parameter. 65535 comfortably covers every

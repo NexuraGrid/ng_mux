@@ -453,6 +453,21 @@ func tail(s string, n int) string {
 	return s[len(s)-n:]
 }
 
+// TestExecArgsKeepQuoting is the `ngmux send-keys -t 0 "echo QA QB" Enter`
+// form: each shell argument must reach the server as one token, so the pane
+// runs `echo QA QB` instead of `echoQAQB`.
+func TestExecArgsKeepQuoting(t *testing.T) {
+	h := newHarness(t)
+	time.Sleep(300 * time.Millisecond)
+	line := client.JoinArgs([]string{"send-keys", "-t", "0", "echo QA QB", "Enter"})
+	if err := client.Exec(h.ep, line); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if !h.waitFor("QA QB", 3*time.Second) {
+		t.Fatalf("pane did not get the quoted argument whole; got:\n%q", h.screen())
+	}
+}
+
 func TestExecSendKeysReachesPane(t *testing.T) {
 	h := newHarness(t)
 	time.Sleep(300 * time.Millisecond)

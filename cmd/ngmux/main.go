@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -75,7 +76,7 @@ func main() {
 	default:
 		// Anything else is treated as a command line for the running server,
 		// tmux-style: `ngmux new-window`, `ngmux send-keys -t 0 "ls" Enter`.
-		err = client.Exec(ep, strings.Join(os.Args[1:], " "))
+		err = client.Exec(ep, client.JoinArgs(os.Args[1:]))
 	}
 
 	if err != nil {
@@ -185,16 +186,29 @@ func cmdAttach(ep ipc.Endpoint, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := ipc.Dial(ep); err != nil {
-		return fmt.Errorf("no server running (use `ngmux new`)")
+	conn, err := dialServer(ep, "no server running (use `ngmux new`)")
+	if err != nil {
+		return err
 	}
+	conn.Close()
 	return client.Attach(ep, name, os.Stdin, os.Stdout)
 }
 
-func cmdList(ep ipc.Endpoint) error {
+// dialServer connects to a running server. Only "nobody is listening" becomes
+// noServer; any other error (e.g. an unsafe socket dir) is returned as is
+// instead of being hidden behind "no server running".
+func dialServer(ep ipc.Endpoint, noServer string) (net.Conn, error) {
 	conn, err := ipc.Dial(ep)
+	if errors.Is(err, ipc.ErrNoServer) {
+		return nil, errors.New(noServer)
+	}
+	return conn, err
+}
+
+func cmdList(ep ipc.Endpoint) error {
+	conn, err := dialServer(ep, "no server running")
 	if err != nil {
-		return fmt.Errorf("no server running")
+		return err
 	}
 	pc := protocol.NewConn(conn)
 	if err := pc.Write(protocol.Message{Type: protocol.TypeListReq}); err != nil {
@@ -226,9 +240,9 @@ func cmdKillSession(ep ipc.Endpoint, args []string) error {
 	if name == "" {
 		return fmt.Errorf("kill-session needs -t <name>")
 	}
-	conn, err := ipc.Dial(ep)
+	conn, err := dialServer(ep, "no server running")
 	if err != nil {
-		return fmt.Errorf("no server running")
+		return err
 	}
 	pc := protocol.NewConn(conn)
 	if err := pc.Write(protocol.Message{Type: protocol.TypeKillSession, Name: name}); err != nil {
@@ -240,9 +254,9 @@ func cmdKillSession(ep ipc.Endpoint, args []string) error {
 }
 
 func cmdKillServer(ep ipc.Endpoint) error {
-	conn, err := ipc.Dial(ep)
+	conn, err := dialServer(ep, "no server running")
 	if err != nil {
-		return fmt.Errorf("no server running")
+		return err
 	}
 	pc := protocol.NewConn(conn)
 	if err := pc.Write(protocol.Message{Type: protocol.TypeKillServer}); err != nil {

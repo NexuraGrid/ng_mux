@@ -17,8 +17,9 @@ import (
 //
 // Under a shared /tmp another user can create ngmux-<uid> first, so an
 // existing dir is trusted only if it is a real directory (not a symlink),
-// owned by us and mode 0700; anything else is refused, as tmux does, instead
-// of listening or dialing through a dir someone else controls.
+// owned by us and with no group or other permission bits; anything else is
+// refused, as tmux does, instead of listening or dialing through a dir someone
+// else controls. A trusted dir is brought to 0700.
 func socketDir() (string, error) {
 	base := os.Getenv("XDG_RUNTIME_DIR")
 	if base == "" {
@@ -28,14 +29,7 @@ func socketDir() (string, error) {
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Mkdir(dir, 0o700); err == nil {
-		// A dir we just created is ours; force 0700 past the umask or a
-		// default ACL on base. An existing dir is never chmod'ed: it is
-		// checked below and refused if wrong.
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return "", err
-		}
-	} else if !os.IsExist(err) {
+	if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
 		return "", err
 	}
 	info, err := os.Lstat(dir)
@@ -46,8 +40,17 @@ func socketDir() (string, error) {
 		return "", fmt.Errorf("ipc: socket dir %s is not a directory", dir)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(st.Uid) != os.Getuid() || info.Mode().Perm() != 0o700 {
-		return "", fmt.Errorf("ipc: socket dir %s has unsafe permissions (want owner uid %d, mode 0700)", dir, os.Getuid())
+	if !ok || int(st.Uid) != os.Getuid() || info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("ipc: socket dir %s has unsafe permissions (want owner uid %d, no group or other access)", dir, os.Getuid())
+	}
+	// Ours and owner-only, but maybe narrower than 0700: a restrictive umask
+	// (0277 gives 0500), possibly from another ngmux that created it a moment
+	// ago and has not chmod'ed it yet. Nobody else can have touched it, so
+	// bring it to 0700 instead of refusing it.
+	if info.Mode().Perm() != 0o700 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return "", err
+		}
 	}
 	return dir, nil
 }

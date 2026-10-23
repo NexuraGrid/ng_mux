@@ -130,3 +130,44 @@ func TestSocketDirNormalizesFreshDirMode(t *testing.T) {
 		t.Fatalf("socketDir = %q mode %v, want %q 0700", got, info.Mode().Perm(), want)
 	}
 }
+
+// TestSocketDirAcceptsRacingFreshDir is B19: another ngmux started at the same
+// moment under umask 0277 has just created the dir (mode 0500) but not yet
+// chmod'ed it. The dir is ours and owner-only, so it must be accepted and
+// brought to 0700, not refused as unsafe.
+func TestSocketDirAcceptsRacingFreshDir(t *testing.T) {
+	for _, mode := range []os.FileMode{0o500, 0o300, 0o000} {
+		dir := runtimeDir(t)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := socketDir(); err != nil {
+			t.Fatalf("socketDir on our own %#o dir: %v", mode, err)
+		}
+		if info, _ := os.Lstat(dir); info.Mode().Perm() != 0o700 {
+			t.Fatalf("%#o dir: mode = %v, want 0700", mode, info.Mode().Perm())
+		}
+	}
+}
+
+// TestSocketDirRefusesGroupBit: an owner-only check must not accept a dir
+// that grants the group anything, even with the other bits clear.
+func TestSocketDirRefusesGroupBit(t *testing.T) {
+	dir := runtimeDir(t)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	_, err := socketDir()
+	if err == nil || !strings.Contains(err.Error(), "unsafe permissions") {
+		t.Fatalf("socketDir on a 0710 dir: err = %v, want unsafe permissions", err)
+	}
+	if info, _ := os.Lstat(dir); info.Mode().Perm() != 0o710 {
+		t.Fatalf("mode changed to %v", info.Mode().Perm())
+	}
+}
