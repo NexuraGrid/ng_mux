@@ -3,6 +3,23 @@
 Pending work from the 2026-10-21 stability/fidelity audit, after P0 (freeze, bracketed paste) and P1 (terminal-fidelity) shipped.
 Pick items from here into their own feature document when work resumes. Runner: `go test -race ./...`.
 
+## Status (2026-10-22)
+
+Done and merged to `main`
+- v0.9.0: P0 (freeze, bracketed paste), P1 (terminal fidelity).
+- v0.9.1: B3-B5 security/diagnostics (PR #36), B15 fzf/zoxide colors (PR #37).
+- After v0.9.1, not released yet: B22-B23 phantom session `0` and detach on session close (PR #38); B17, B18, B19, B21 dial errors, CLI quoting, socket dir race, truecolor/colon SGR (PR #39).
+- B2 image paste: checked by the user.
+- Decision: no key binding to kill a whole session (L6).
+
+Pending
+- Next: release v0.9.2 with PR #38 and #39 (user asked to wait until now).
+- Needs the user on real Windows: B16 elevated vs non-elevated terminal; B1 heavy-log workers (new/attach/Ctrl+V/Ctrl+C already work).
+- Advisories: B6-B12, B20.
+- Performance: B13 (vt10x `clear()` on log floods).
+- Product: B14 (mouse capture default).
+- Follow-ups from PR #39 (`odd/tasks/real-bugs-b17-b21.md`): harden `TestExecArgsKeepQuoting` (it also matches the echoed input); fd-based socket dir check for a misconfigured non-sticky base dir.
+
 ## Specs
 
 Validation (needs a human with the real environment)
@@ -78,3 +95,4 @@ Product
 - L5 (2026-10-22, user): "Si por favor arregla los bugs y anota para que sepamos y nos quede como historial de que se detecto y que se van a corregir y en cuento a lo de la terminal elevada todavia no he hecho la prueba edspues la hago". Added B22-B23 (phantom session `0`, switch-on-close) and fixed them on `fix/session-lifecycle`; recorded the partial Windows checks in B1 and B16.
 - L6 (2026-10-22, user): "no tranquilo no se aplicara un comando para cerrar una session entera esa mejor asi como esta". Decision: no key binding to kill a whole session; it stays `Ctrl-b :` `kill-session` or `ngmux kill-session -t NAME`, so it cannot be triggered by accident.
 - L7 (2026-10-22, user): "No todavia no ahora arreglemos esto" (no v0.9.2 release yet; fix B18, B17, B21, B19). Done on `fix/real-bugs-b17-b21`, see `odd/tasks/real-bugs-b17-b21.md`.
+- L8 (2026-10-22, user): "Ok por davor guarda todo lo hecho y anota lo que ya quedo liso y lo que nos falta por hacer por favor". Added the Status section; PR #38 and #39 merged, v0.9.2 not released yet.
