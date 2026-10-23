@@ -10,10 +10,11 @@ Done and merged to `main`
 - v0.9.1: B3-B5 security/diagnostics (PR #36), B15 fzf/zoxide colors (PR #37).
 - v0.9.2: B22-B23 phantom session `0` and detach on session close (PR #38); B17, B18, B19, B21 dial errors, CLI quoting, socket dir race, truecolor/colon SGR (PR #39).
 - B2 image paste: checked by the user.
+- B1 heavy-log workers on real Windows (ConPTY): checked by the user.
 - Decision: no key binding to kill a whole session (L6).
 
 Pending
-- Needs the user on real Windows: B16 elevated vs non-elevated terminal; B1 heavy-log workers (new/attach/Ctrl+V/Ctrl+C already work).
+- Needs the user on real Windows: B16 elevated vs non-elevated terminal; B24 every improvement on Windows Server 2016 (winpty).
 - Advisories: B6-B12, B20.
 - Performance: B13 (vt10x `clear()` on log floods).
 - Product: B14 (mouse capture default).
@@ -23,7 +24,8 @@ Pending
 
 Validation (needs a human with the real environment)
 
-- B1 Partly checked (2026-10-22, user on real Windows): `new`, `attach`, Ctrl+V and Ctrl+C work; the heavy-log workers run is still pending. Test the P0/P1 build on real Windows (ConPTY) with the workers whose log output froze ngmux; confirm Ctrl-b d and Ctrl-C keep working under heavy logs.
+- B1 Done (2026-10-22, user on real Windows, ConPTY): `new`, `attach`, Ctrl+V and Ctrl+C work, and a 60 s flood script (plain, ANSI-colored, very long lines and 20k-line bursts) inside a pane did not freeze ngmux. User: "Pues funciona bien mira :  DONE  2533840 lines in 60s (42229 lines/s)".
+- B24 Pending (user will run it on Windows Server 2016). Nothing since v0.4.0 was tested on the winpty fallback: CI runs only `windows-latest` (ConPTY). The server/vterm changes (input queue, crash hardening, scrollback, color fixes) do not depend on the pty backend, and the pipe security (B3) uses Vista+ APIs, so they should apply; but winpty translates input into console events and scrapes the console for output, so bracketed paste (Ctrl+V), mouse passthrough to apps and 256/truecolor may differ. Check on 2016: `ngmux new`/`attach`/`ls`; the team's real workers with heavy log output (not a synthetic flood script) with Ctrl-b d, Ctrl-C, copy-mode scroll and typing in another pane while it runs; Ctrl+V paste (multi-line); mouse in an app (e.g. a TUI); colors (`zi`/fzf, `ls --color`). User: "en cuento a lo de 2016 si dejalo como pendiente por hacer pues que hay que hacer pruebas para que no se me olvide".
 - B2 Done (2026-10-22): image paste works via Alt+V, drag-and-drop and the clipboard history; Ctrl+V and Ctrl+Shift+V do not (Windows Terminal takes them for text paste; Claude Code on Windows binds image paste to Alt+V). User: "funciona de 3 formas el pegaod de la imagen".
 
 P2 security (ngmux runs on shared servers)
@@ -83,7 +85,8 @@ Product
 | - | B15 | inline | done, v0.9.1 (PR #37) |
 | - | B22-B23 | inline, `fix/session-lifecycle` | done, v0.9.2 (PR #38) |
 | - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | done, v0.9.2 (PR #39) |
-| - | B1, B6-B14, B16, B20 | - | open, not planned yet |
+| - | B1 | - | done (user check) |
+| - | B6-B14, B16, B20, B24 | - | open, not planned yet |
 
 ## Log
 
@@ -96,3 +99,4 @@ Product
 - L7 (2026-10-22, user): "No todavia no ahora arreglemos esto" (no v0.9.2 release yet; fix B18, B17, B21, B19). Done on `fix/real-bugs-b17-b21`, see `odd/tasks/real-bugs-b17-b21.md`.
 - L8 (2026-10-22, user): "Ok por davor guarda todo lo hecho y anota lo que ya quedo liso y lo que nos falta por hacer por favor". Added the Status section; PR #38 and #39 merged, v0.9.2 not released yet.
 - L9 (2026-10-22, user): "si por favor" (release). v0.9.2 tagged on `1bb191a` and published by the release workflow with PR #38 and #39; 5 binaries + SHA256SUMS.
+- L10 (2026-10-22, user): "Si marca por favor lo de B1 en cuento a lo de 2016 si dejalo como pendiente por hacer pues que hay que hacer pruebas para que no se me olvide y apenas pueda lo hago y te aviso". B1 marked done after the flood-script run; added B24 (Windows Server 2016 / winpty check). Later (user): "en cuanto a lo del script tranquilo en el caso de eso pues pondremos a prueba con los workers que tenemos nosotro y vemos que pasa", so B24 uses the real workers.
