@@ -8,12 +8,11 @@ Pick items from here into their own feature document when work resumes. Runner: 
 Done and merged to `main`
 - v0.9.0: P0 (freeze, bracketed paste), P1 (terminal fidelity).
 - v0.9.1: B3-B5 security/diagnostics (PR #36), B15 fzf/zoxide colors (PR #37).
-- After v0.9.1, not released yet: B22-B23 phantom session `0` and detach on session close (PR #38); B17, B18, B19, B21 dial errors, CLI quoting, socket dir race, truecolor/colon SGR (PR #39).
+- v0.9.2: B22-B23 phantom session `0` and detach on session close (PR #38); B17, B18, B19, B21 dial errors, CLI quoting, socket dir race, truecolor/colon SGR (PR #39).
 - B2 image paste: checked by the user.
 - Decision: no key binding to kill a whole session (L6).
 
 Pending
-- Next: release v0.9.2 with PR #38 and #39 (user asked to wait until now).
 - Needs the user on real Windows: B16 elevated vs non-elevated terminal; B1 heavy-log workers (new/attach/Ctrl+V/Ctrl+C already work).
 - Advisories: B6-B12, B20.
 - Performance: B13 (vt10x `clear()` on log floods).
@@ -82,8 +81,8 @@ Product
 | - | B2 | - | done (user check) |
 | - | B3-B5 | `odd/tasks/p2-hardening.md` | done, v0.9.1 (PR #36) |
 | - | B15 | inline | done, v0.9.1 (PR #37) |
-| - | B22-B23 | inline, `fix/session-lifecycle` | done, PR #38 (merged 2026-10-22), not released yet |
-| - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | done, PR #39 (merged 2026-10-22), not released yet |
+| - | B22-B23 | inline, `fix/session-lifecycle` | done, v0.9.2 (PR #38) |
+| - | B17-B19, B21 | inline, `odd/tasks/real-bugs-b17-b21.md` | done, v0.9.2 (PR #39) |
 | - | B1, B6-B14, B16, B20 | - | open, not planned yet |
 
 ## Log
@@ -96,3 +95,4 @@ Product
 - L6 (2026-10-22, user): "no tranquilo no se aplicara un comando para cerrar una session entera esa mejor asi como esta". Decision: no key binding to kill a whole session; it stays `Ctrl-b :` `kill-session` or `ngmux kill-session -t NAME`, so it cannot be triggered by accident.
 - L7 (2026-10-22, user): "No todavia no ahora arreglemos esto" (no v0.9.2 release yet; fix B18, B17, B21, B19). Done on `fix/real-bugs-b17-b21`, see `odd/tasks/real-bugs-b17-b21.md`.
 - L8 (2026-10-22, user): "Ok por davor guarda todo lo hecho y anota lo que ya quedo liso y lo que nos falta por hacer por favor". Added the Status section; PR #38 and #39 merged, v0.9.2 not released yet.
+- L9 (2026-10-22, user): "si por favor" (release). v0.9.2 tagged on `1bb191a` and published by the release workflow with PR #38 and #39; 5 binaries + SHA256SUMS.
