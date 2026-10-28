@@ -19,7 +19,10 @@ import (
 type sessionOpts struct {
 	historyLimit int
 	defaultShell string // empty => platform default
-	setClipboard bool   // mirror copy-mode yanks to the OS clipboard (OSC 52)
+	// defaultShellArgs are the arguments for defaultShell (ignored when it is
+	// empty: the platform default brings its own).
+	defaultShellArgs []string
+	setClipboard     bool // mirror copy-mode yanks to the OS clipboard (OSC 52)
 
 	// palette styles the status bar, borders, pane titles, badges and the
 	// copy-mode indicator. The zero value means theme.Dark().
@@ -129,7 +132,7 @@ func newSession(name string, cols, rows int, opts sessionOpts, onEmpty func(stri
 // the session is not yet shared).
 func (s *session) spawnWindow(cols, rows int) (*window, error) {
 	w, err := newWindow(s.nextWin(), s.defaultWindowName(), s.nextPane(), cols, rows,
-		s.opts.defaultShell, s.opts.historyLimit, s.opts.newPane, s.opts.logf)
+		s.shellArgv(), s.opts.historyLimit, s.opts.newPane, s.opts.logf)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +160,7 @@ func (s *session) breakPane() error {
 	if p == nil {
 		return fmt.Errorf("break-pane: the window has only one pane")
 	}
-	nw := wrapWindow(s.nextWin(), s.defaultWindowName(), p, s.opts.defaultShell,
+	nw := wrapWindow(s.nextWin(), s.defaultWindowName(), p, s.shellArgv(),
 		s.opts.historyLimit, s.opts.newPane, s.opts.logf)
 	nw.titles = s.opts.paneTitles
 	s.windows = append(s.windows, nw)
@@ -213,6 +216,15 @@ func (s *session) joinPane(srcIdx int, dir layout.Orientation) error {
 		}
 	}
 	return nil
+}
+
+// shellArgv is the argv new panes run: the configured shell and its arguments,
+// or nil for the platform default.
+func (s *session) shellArgv() []string {
+	if s.opts.defaultShell == "" {
+		return nil
+	}
+	return append([]string{s.opts.defaultShell}, s.opts.defaultShellArgs...)
 }
 
 func (s *session) defaultWindowName() string {

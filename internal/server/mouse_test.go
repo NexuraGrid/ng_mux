@@ -313,7 +313,7 @@ func TestMouseForwardWritesOutsideSessionLock(t *testing.T) {
 
 	srv := newServer(ipc.Endpoint{Name: "test"}, 80, 24, nil, sessionOpts{
 		historyLimit: 100,
-		newPane: func(id layout.PaneID, cols, rows int, shell string, hist int) (*pane, error) {
+		newPane: func(id layout.PaneID, cols, rows int, shell []string, hist int) (*pane, error) {
 			return &pane{id: id, pt: bp, vt: scr}, nil
 		},
 	})

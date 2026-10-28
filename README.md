@@ -243,6 +243,13 @@ bind P passthrough
 
 A `bind` takes the rest of the line as the command, arguments included.
 
+`default-shell` is the program new panes run (default: `$SHELL` on Linux and
+macOS, PowerShell when available on Windows). Words after the program are passed to it as arguments, e.g.
+`set default-shell pwsh -NoLogo`. Put a path with spaces in double or single
+quotes: `set default-shell "C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo`.
+Backslashes are kept as written. An unquoted path with spaces still works when
+it is the whole value and names an existing file.
+
 `escape-time` is how many milliseconds a lone `Esc` waits for the rest of an
 escape sequence before it is sent on its own (default 25). Raise it on a slow
 link if arrow keys misfire; lower it to `0` if an app inside ngmux feels

@@ -332,7 +332,7 @@ type fakePane struct {
 }
 
 func (ff *fakeFleet) factory() paneFactory {
-	return func(id layout.PaneID, cols, rows int, shell string, hist int) (*pane, error) {
+	return func(id layout.PaneID, cols, rows int, shell []string, hist int) (*pane, error) {
 		pt := newFakePty(cols, rows)
 		sc := newFakeScreen(cols, rows)
 		sc.SetHistoryLimit(hist)

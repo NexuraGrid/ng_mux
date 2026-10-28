@@ -32,7 +32,7 @@ type window struct {
 	// pane-titles option.
 	titles bool
 
-	shell     string
+	shell     []string // argv for new panes; empty = platform default
 	histLimit int
 	newPane   paneFactory
 
@@ -43,7 +43,7 @@ type window struct {
 }
 
 // newWindow creates a window with a single pane sized to the given content area.
-func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) (*window, error) {
+func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell []string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) (*window, error) {
 	if newPane == nil {
 		newPane = startPane
 	}
@@ -67,7 +67,7 @@ func newWindow(id int, name string, paneID layout.PaneID, cols, rows int, shell 
 // (break-pane's use case), doing so would race with pump's reads of it. logf
 // is server-wide and never actually changes across a pane's lifetime, so the
 // value the pane got at creation remains correct.
-func wrapWindow(id int, name string, p *pane, shell string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) *window {
+func wrapWindow(id int, name string, p *pane, shell []string, histLimit int, newPane paneFactory, logf func(format string, args ...any)) *window {
 	w := &window{
 		id:        id,
 		name:      name,
