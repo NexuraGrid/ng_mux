@@ -427,3 +427,67 @@ bind P passthrough
 		}
 	}
 }
+
+func TestDefaultShellParsesArguments(t *testing.T) {
+	cases := []struct {
+		line     string
+		wantProg string
+		wantArgs []string
+	}{
+		{"set default-shell /bin/bash", "/bin/bash", nil},
+		{"set default-shell pwsh -NoLogo", "pwsh", []string{"-NoLogo"}},
+		{`set default-shell "C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -NoProfile`,
+			`C:\Program Files\PowerShell\7\pwsh.exe`, []string{"-NoLogo", "-NoProfile"}},
+		{`set default-shell '/opt/my shell/bin/zsh' -l`, "/opt/my shell/bin/zsh", []string{"-l"}},
+		{`set default-shell bash -c "exec fish"`, "bash", []string{"-c", "exec fish"}},
+	}
+	for _, tc := range cases {
+		cfg, err := LoadFile(writeConf(t, tc.line+"\n"))
+		if err != nil {
+			t.Fatalf("%s: LoadFile: %v", tc.line, err)
+		}
+		if len(cfg.Warnings) != 0 {
+			t.Fatalf("%s: unexpected warnings: %v", tc.line, cfg.Warnings)
+		}
+		if cfg.DefaultShell != tc.wantProg {
+			t.Errorf("%s: prog = %q, want %q", tc.line, cfg.DefaultShell, tc.wantProg)
+		}
+		if strings.Join(cfg.DefaultShellArgs, "|") != strings.Join(tc.wantArgs, "|") || len(cfg.DefaultShellArgs) != len(tc.wantArgs) {
+			t.Errorf("%s: args = %q, want %q", tc.line, cfg.DefaultShellArgs, tc.wantArgs)
+		}
+	}
+}
+
+func TestDefaultShellUnclosedQuoteWarns(t *testing.T) {
+	cfg, err := LoadFile(writeConf(t, `set default-shell "C:\Program Files\pwsh.exe -NoLogo`+"\n"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "quote") {
+		t.Fatalf("expected one unclosed-quote warning, got %v", cfg.Warnings)
+	}
+	if cfg.DefaultShell != "" || cfg.DefaultShellArgs != nil {
+		t.Errorf("a rejected value must leave the default, got %q %q", cfg.DefaultShell, cfg.DefaultShellArgs)
+	}
+}
+
+func TestDefaultShellExistingPathWithSpacesStaysWhole(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "my shells")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sh := filepath.Join(dir, "sh")
+	if err := os.WriteFile(sh, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(writeConf(t, "set default-shell "+sh+"\n"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", cfg.Warnings)
+	}
+	if cfg.DefaultShell != sh || len(cfg.DefaultShellArgs) != 0 {
+		t.Errorf("got prog %q args %q, want %q with no args", cfg.DefaultShell, cfg.DefaultShellArgs, sh)
+	}
+}

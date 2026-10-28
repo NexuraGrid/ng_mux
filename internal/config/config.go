@@ -4,6 +4,7 @@
 //	set prefix C-a
 //	set history-limit 5000
 //	set default-shell /bin/bash
+//	set default-shell "C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo
 //	set mouse on
 //	set escape-time 25
 //	set theme light
@@ -37,18 +38,19 @@ const DefaultPrefix = 0x02
 
 // Config is the resolved configuration. Zero value is the built-in default.
 type Config struct {
-	Prefix       byte              // control byte that begins a command sequence
-	HistoryLimit int               // scrollback lines kept per pane
-	DefaultShell string            // overrides $SHELL / platform default when set
-	Mouse        bool              // reserved for a later phase
-	EscapeTime   int               // ms to wait for a sequence after a lone Esc (tmux's escape-time)
-	StatusFG     int               // status bar text colour (0..255 or theme.Default); -1 = the theme's
-	StatusBG     int               // status bar background colour (0..255 or theme.Default); -1 = the theme's
-	SetClipboard bool              // copy-mode yank also sets the OS clipboard via OSC 52
-	Theme        string            // palette name for all chrome: dark, light or mono
-	PaneTitles   bool              // a title line above each pane of a split window
-	Binds        map[string]string // key (single rune) -> command line (with its arguments)
-	Colours      map[string]int    // per-element colour key (see colourKeys) -> colour
+	Prefix           byte              // control byte that begins a command sequence
+	HistoryLimit     int               // scrollback lines kept per pane
+	DefaultShell     string            // overrides $SHELL / platform default when set
+	DefaultShellArgs []string          // arguments passed to DefaultShell
+	Mouse            bool              // reserved for a later phase
+	EscapeTime       int               // ms to wait for a sequence after a lone Esc (tmux's escape-time)
+	StatusFG         int               // status bar text colour (0..255 or theme.Default); -1 = the theme's
+	StatusBG         int               // status bar background colour (0..255 or theme.Default); -1 = the theme's
+	SetClipboard     bool              // copy-mode yank also sets the OS clipboard via OSC 52
+	Theme            string            // palette name for all chrome: dark, light or mono
+	PaneTitles       bool              // a title line above each pane of a split window
+	Binds            map[string]string // key (single rune) -> command line (with its arguments)
+	Colours          map[string]int    // per-element colour key (see colourKeys) -> colour
 
 	// Warnings holds human-readable notes about lines that were ignored.
 	Warnings []string
@@ -256,7 +258,11 @@ func (c *Config) set(name, value string) error {
 		}
 		c.HistoryLimit = n
 	case "default-shell":
-		c.DefaultShell = value
+		prog, args, err := parseShell(value, fileExists)
+		if err != nil {
+			return fmt.Errorf("default-shell: %v", err)
+		}
+		c.DefaultShell, c.DefaultShellArgs = prog, args
 	case "mouse":
 		on, err := parseBool(value)
 		if err != nil {
@@ -309,6 +315,58 @@ func (c *Config) set(name, value string) error {
 		c.Colours[name] = n
 	}
 	return nil
+}
+
+// parseShell splits a default-shell value into the program and its arguments.
+// Words are separated by spaces; double or single quotes group words, so
+// `"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo` keeps the path whole.
+// Backslashes stay literal (Windows paths). A value that as a whole names an
+// existing file is kept as the program with no arguments, so an unquoted path
+// with spaces keeps working as it always did.
+func parseShell(value string, exists func(string) bool) (string, []string, error) {
+	if exists(value) {
+		return value, nil, nil
+	}
+	var (
+		words  []string
+		cur    strings.Builder
+		inWord bool
+		quote  rune
+	)
+	for _, r := range value {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			quote, inWord = r, true
+		case r == ' ' || r == '\t':
+			if inWord {
+				words = append(words, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(r)
+			inWord = true
+		}
+	}
+	if quote != 0 {
+		return "", nil, fmt.Errorf("unclosed %c quote in %q", quote, value)
+	}
+	if inWord {
+		words = append(words, cur.String())
+	}
+	if len(words) == 0 || words[0] == "" {
+		return "", nil, fmt.Errorf("needs a program")
+	}
+	if len(words) == 1 {
+		return words[0], nil, nil
+	}
+	return words[0], words[1:], nil
 }
 
 // parseKey turns "C-a", "C-b", "^A" or a bare single char into its control byte.

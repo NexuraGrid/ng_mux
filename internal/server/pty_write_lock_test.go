@@ -55,7 +55,7 @@ func TestPtyWritingCommandsDoNotHoldSessionLock(t *testing.T) {
 			srv := newServer(ipc.Endpoint{Name: "lock"}, 80, 24, nil, sessionOpts{
 				historyLimit: 10,
 				defaultShell: "/bin/fakesh",
-				newPane: func(id layout.PaneID, cols, rows int, _ string, _ int) (*pane, error) {
+				newPane: func(id layout.PaneID, cols, rows int, _ []string, _ int) (*pane, error) {
 					return &pane{id: id, pt: bp, vt: newFakeScreen(cols, rows)}, nil
 				},
 			})

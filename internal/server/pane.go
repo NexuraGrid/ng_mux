@@ -53,7 +53,7 @@ type screen interface {
 
 // paneFactory builds a pane for a window. Injected through sessionOpts so tests
 // can supply fakes; production always uses startPane.
-type paneFactory func(id layout.PaneID, cols, rows int, shell string, histLimit int) (*pane, error)
+type paneFactory func(id layout.PaneID, cols, rows int, shell []string, histLimit int) (*pane, error)
 
 // pane couples a child process on a pty with the emulator that interprets its
 // output. One pane == one shell. win is the window that currently holds it, so
@@ -84,10 +84,15 @@ type pane struct {
 	logf func(format string, args ...any)
 }
 
-// startPane opens a pty running shell (empty = platform default) and wires an
-// emulator with the given scrollback limit. It is the production paneFactory.
-func startPane(id layout.PaneID, cols, rows int, shell string, histLimit int) (*pane, error) {
-	pt, err := ptyx.Start(ptyx.Config{Cols: cols, Rows: rows, Prog: shell})
+// startPane opens a pty running shell (argv: program then arguments; empty =
+// platform default) and wires an emulator with the given scrollback limit. It
+// is the production paneFactory.
+func startPane(id layout.PaneID, cols, rows int, shell []string, histLimit int) (*pane, error) {
+	cfg := ptyx.Config{Cols: cols, Rows: rows}
+	if len(shell) > 0 {
+		cfg.Prog, cfg.Args = shell[0], shell[1:]
+	}
+	pt, err := ptyx.Start(cfg)
 	if err != nil {
 		return nil, err
 	}
