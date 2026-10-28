@@ -49,3 +49,6 @@ program literally named `pwsh -NoLogo` and the pane fails to start.
 ## Progress
 - Branch: `feat/default-shell-args`
 - Delivery strategy: ask-on-risk (forecast ~150 lines, under budget)
+
+- Commit: `8971f2a` feat(config): accept arguments in default-shell
+- Review assess: medium, review_due=false (under_budget)
